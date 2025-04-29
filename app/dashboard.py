@@ -6,6 +6,7 @@ import torch
 import pymupdf
 import json
 import time
+from pathlib import Path
 
 from pdf_process import (
     handle_pdf_download_from_dataset,
@@ -20,64 +21,42 @@ from export_results import (
     OUTPUT_DIR,
 )
 
-torch.classes.__path__ = [os.path.join(torch.__path__[0], torch.classes.__file__)]
+# Fix torch path handling
 torch.classes.__path__ = []
 
-if "export_ready" not in st.session_state:
-    st.session_state.export_ready = False
-if "zip_path" not in st.session_state:
-    st.session_state.zip_path = None
-if "show_confirm_dialog" not in st.session_state:
-    st.session_state.show_confirm_dialog = False
+DATA_TEMP = Path("app/temp/data")
+os.makedirs(DATA_TEMP, exist_ok=True)
 
+# Initialize session state variables
+def init_session_state():
+    if "export_ready" not in st.session_state:
+        st.session_state.export_ready = False
+    if "zip_path" not in st.session_state:
+        st.session_state.zip_path = None
+    if "show_confirm_dialog" not in st.session_state:
+        st.session_state.show_confirm_dialog = False
+    if "process_pdf_clicked" not in st.session_state:
+        st.session_state.process_pdf_clicked = False
+    if "cancel_processing" not in st.session_state:
+        st.session_state.cancel_processing = False
+    if "data_temp" not in st.session_state:
+        st.session_state.data_temp = DATA_TEMP
+    if "already_exported" not in st.session_state:
+        st.session_state.already_exported = False
 
-st.set_page_config(page_title="PDF Processing Dashboard", layout="wide")
-st.title("PDF Processing Dashboard")
+# Configure page
+def setup_page():
+    st.set_page_config(page_title="PDF Processing Dashboard", layout="wide")
+    st.title("PDF Processing Dashboard")
 
-st.sidebar.title("Options")
-st.sidebar.write("Select options to process PDF files. Default export JSON")
-
-number_thread = st.sidebar.number_input(
-    "Number of Threads",
-    min_value=1, max_value=64, value=4, step=1, key="number_thread"
-)
-
-export_to_markdown = st.sidebar.checkbox("Export to Markdown", value=False)
-separate_result_dir = st.sidebar.checkbox(
-    "Create separate result directory", value=True
-)
-
-dataset_file = st.sidebar.file_uploader(
-    "Upload Dataset (CSV/Excel)", type=["csv", "xlsx"]
-)
-
-df = None
-columnn_list = []
-if dataset_file:
-    ensure_temp_dir()
-    temp_file_path = TEMP_DIR / dataset_file.name
-    with open(temp_file_path, "wb") as f:
-        f.write(dataset_file.getbuffer())
-
-    df = read_dataset(temp_file_path)
-    columnn_list = df.columns.tolist()
-
-if df is not None and columnn_list:
-    id_col = st.sidebar.selectbox("Select ID Column", options=columnn_list)
-    url_col = st.sidebar.selectbox("Select URL Column", options=columnn_list)
-else:
-    id_col = None
-    url_col = None
-
-download_col, clear_temp_col = st.sidebar.columns(2, vertical_alignment="bottom")
-
+# Utility functions
 def zip_for_download(progress_callback=None):
     target_folder = OUTPUT_DIR
     base_name = "exported_results"
 
-    # Simulasi Progress
+    # Show progress
     if progress_callback:
-        progress_callback(0.2)  # 20% sebelum mulai zipping
+        progress_callback(0.2)  # 20% before zipping
 
     zip_path = shutil.make_archive(
         base_name=base_name,
@@ -86,7 +65,7 @@ def zip_for_download(progress_callback=None):
     )
 
     if progress_callback:
-        progress_callback(0.7)  # 70% setelah zip selesai dibuat
+        progress_callback(0.7)  # 70% after zip creation
 
     return zip_path
 
@@ -96,9 +75,14 @@ def prepare_export():
     def update_progress(val):
         progress_bar.progress(val, text="Preparing export...")
 
-    st.session_state.zip_path = zip_for_download(progress_callback=update_progress)
+    try:
+        st.session_state.zip_path = zip_for_download(progress_callback=update_progress)
+    except Exception as e:
+        st.error(f"Error during export preparation: {e}")
+        st.info("Maybe you haven't started extraction yet?")
+        return
 
-    time.sleep(0.5)  # Simulasi delay kecil
+    time.sleep(0.5)  # Small delay simulation
     update_progress(0.9)
     clear_temp_dir(OUTPUT_DIR)
 
@@ -108,11 +92,100 @@ def prepare_export():
     st.session_state.export_ready = True
     progress_bar.empty()
 
-if not st.session_state.export_ready:
-    if st.sidebar.button("Export", use_container_width=True, icon=":material/download:"):
+def has_extracted_data(output_dir: str | Path, export_to_markdown: bool):
+    if not os.path.exists(output_dir):
+        return False
+    
+    if export_to_markdown:
+        # Check subfolder contents
+        check_dir = os.listdir(output_dir)
+        extracted_files = [f for f in check_dir if os.path.isfile(os.path.join(output_dir, f)) and f.endswith('.json')]
+    else:
+        extracted_files = [f for f in os.listdir(output_dir) if f.endswith('.json')]
+    
+    return len(extracted_files) > 0
+
+def process_pdf_click():
+    st.session_state.process_pdf_clicked = True
+
+def cancel_processing():
+    st.session_state.cancel_processing = True
+    st.session_state.process_pdf_clicked = False
+
+# UI Components
+def render_sidebar():
+    st.sidebar.title("Options")
+    st.sidebar.write("Select options to process PDF files. Default export JSON")
+
+    # Processing options
+    number_thread = st.sidebar.number_input(
+        "Number of Threads",
+        min_value=1, max_value=64, value=4, step=1, key="number_thread"
+    )
+
+    export_to_markdown = st.sidebar.checkbox("Export to Markdown", value=False)
+    separate_result_dir = st.sidebar.checkbox(
+        "Create separate result directory", value=True
+    )
+
+    # Dataset handling
+    dataset_file = st.sidebar.file_uploader(
+        "Upload Dataset (CSV/Excel)", type=["csv", "xlsx"]
+    )
+
+    df = None
+    column_list = []
+    
+    if dataset_file:
+        temp_file_path = DATA_TEMP / dataset_file.name
+        with open(temp_file_path, "wb") as f:
+            f.write(dataset_file.getbuffer())
+
+        df = read_dataset(temp_file_path)
+        column_list = df.columns.tolist()
+    else:
+        # ensure to clear dataset
+        shutil.rmtree(DATA_TEMP)
+        st.sidebar.warning("No dataset file uploaded. Please upload a CSV or Excel file.")
+        temp_file_path = None
+        df = None
+        column_list = []
+
+    # Column selection
+    if df is not None and column_list:
+        id_col = st.sidebar.selectbox("Select ID Column", options=column_list)
+        url_col = st.sidebar.selectbox("Select URL Column", options=column_list)
+    else:
+        id_col = None
+        url_col = None
+
+    # Action buttons
+    download_col, clear_temp_col = st.sidebar.columns(2, vertical_alignment="bottom")
+    
+    with download_col:
+        download_button = st.button("Download", type="primary", key="download_pdfs", 
+                                   icon=":material/download:", help="Download PDFs from the dataset.")
+
+    with clear_temp_col:
+        clear_temp_button = st.button("Temp Files", icon=":material/delete:", 
+                                     help="Clear temporary files after processing.")
+    
+    # Export button
+    export_disabled = has_extracted_data(OUTPUT_DIR, export_to_markdown)
+    export_btn = st.sidebar.button(
+        label="Export",
+        disabled=export_disabled,
+        help="No extracted files yet!" if export_disabled else "Export all extracted results as ZIP",
+        icon=":material/publish:",
+        use_container_width=True,
+        key="export_btn"
+    )
+
+    if export_btn and not export_disabled:
         prepare_export()
         st.session_state.show_confirm_dialog = True
 
+    return temp_file_path, df, id_col, url_col, download_button, clear_temp_button, export_to_markdown, number_thread
 
 @st.dialog("Warning: Export will delete all results ⚠ ")
 def confirmation_delete():
@@ -132,7 +205,7 @@ def confirmation_delete():
     with col1:
         if st.session_state.export_ready and st.session_state.zip_path:
             with open(st.session_state.zip_path, "rb") as f:
-                st.download_button(
+               if st.download_button(
                     label="Download Exported Results",
                     data=f,
                     file_name="exported_results.zip",
@@ -142,38 +215,33 @@ def confirmation_delete():
                     type="primary",
                     icon=":material/download:",
                     help="After downloading, all exported results will be deleted.",
-                )
+                ):
+                    st.session_state.show_confirm_dialog = False
+                    st.session_state.already_exported = True
+                    st.rerun()
     with col2:
         if st.button("Cancel"):
             st.session_state.show_confirm_dialog = False
             st.session_state.cancelled_export = True
             st.rerun()
 
-if st.session_state.get("show_confirm_dialog", False):
-    confirmation_delete()
-                
-
-if st.session_state.get("cancelled_export"):
-    st.toast("Export cancelled!", icon="❌")
-    st.session_state.cancelled_export = False
-
-with download_col:
-    download_button = st.button("Download", type="primary", key="download_pdfs", icon=":material/download:", help="Download PDFs from the dataset.")
-
-with clear_temp_col:
-    clear_temp_button = st.button("Temp Files", icon=":material/delete:", help="Clear temporary files after processing.")
-
-if download_button:
+def handle_download_pdfs(file_path, df, id_col, url_col):
     if df is not None and id_col != url_col:
         total_pdf_files = df[url_col].nunique()
+        total_processing = 0
         total_success = 0
         failed_files = []
+        
         with st.status("Downloading PDFs...", expanded=True) as status:
             results = handle_pdf_download_from_dataset(
-                temp_file_path, id_col, url_col
+                file_path, id_col, url_col
             )
             download_slot = st.empty()
+            
             for result in results:
+                total_processing += 1
+                status.update(label=f"Downloading ({total_processing}/{total_pdf_files}) PDFs...")
+                
                 if result.get("status") == "success":
                     total_success += 1
                     download_slot.success(result.get("message", "Download succeeded."))
@@ -184,40 +252,35 @@ if download_button:
                     failed_files.append(result)
                     download_slot.error(result.get("message", "Download failed."))
 
-            # Retry failed files if any
+            # Retry failed files
             if len(failed_files) > 0:
                 st.info(f"Retrying {len(failed_files)} failed downloads...")
                 retry_results = []
+                
                 for fail in failed_files:
                     row_id = fail.get("id")
                     url = fail.get("url")
+                    
                     if row_id is not None and url is not None:
                         retry_df = df[(df[id_col] == row_id) & (df[url_col] == url)]
+                        
                         if not retry_df.empty:
                             retry_result = handle_pdf_download_from_dataset(
                                 retry_df, id_col, url_col
                             )
+                            
                             for r in retry_result:
-                                if r.get("status") == "success":
+                                if r.get("status") in ["success", "info"]:
                                     total_success += 1
-                                    download_slot.success(
-                                        f"Retry: {r.get('message', 'Download succeeded.')}"
-                                    )
-                                elif r.get("status") == "info":
-                                    total_success += 1
-                                    download_slot.info(
-                                        f"Retry: {r.get('message', 'Download skipped.')}"
+                                    status_type = "success" if r.get("status") == "success" else "info"
+                                    getattr(download_slot, status_type)(
+                                        f"Retry: {r.get('message', 'Download succeeded.' if status_type == 'success' else 'Download skipped.')}"
                                     )
                                 else:
                                     download_slot.error(
                                         f"Retry: {r.get('message', 'Download failed.')}"
                                     )
                                 retry_results.append(r)
-                failed_files = [
-                    r
-                    for r in retry_results
-                    if r.get("status") != "success" and r.get("status") != "info"
-                ]
 
             status.update(
                 label=f"PDF download completed. Total success {total_success}/{total_pdf_files}",
@@ -226,123 +289,109 @@ if download_button:
     else:
         st.sidebar.error("Please upload a dataset and select ID and URL columns.")
 
-if clear_temp_button:
-    clear_temp_dir(TEMP_DIR)
-    st.sidebar.success("Temporary files cleared.")
-    st.rerun()
+def handle_pdf_processing(export_to_markdown, number_thread):
+    ensure_temp_dir()
+    pdf_files = ["Select PDF File"] + os.listdir(TEMP_DIR_PDF)
+    
+    if not pdf_files or pdf_files == ["Select PDF File"]:
+        st.warning("No PDF files found in the temporary PDF directory. Please upload or download PDFs first.")
+        return None
+    
+    process_pdf_btn = st.button(
+        "Process PDF",
+        key="process_pdf",
+        disabled=False if pdf_files and len(pdf_files) > 1 else True,
+        on_click=process_pdf_click,
+    )
 
-# Always render PDF processing and preview components
-ensure_temp_dir()
-pdf_files = ["Select PDF File"] + os.listdir(TEMP_DIR_PDF)
-if not pdf_files or pdf_files == ["Select PDF File"]:
-    st.warning("No PDF files found in the temporary PDF directory. Please upload or download PDFs first.")
-    process_pdf_btn_disabled = True
-else:
-    process_pdf_btn_disabled = False
-
-if "process_pdf_clicked" not in st.session_state:
-    st.session_state.process_pdf_clicked = False
-
-def process_pdf_click():
-    st.session_state.process_pdf_clicked = True
-
-process_pdf_btn = st.button(
-    "Process PDF",
-    key="process_pdf",
-    disabled=process_pdf_btn_disabled and st.session_state.process_pdf_clicked,
-    on_click=process_pdf_click,
-)
-
-if process_pdf_btn:
-    # remove "Select PDF File" from the list
-    pdf_files.remove("Select PDF File")
-
-    if "cancel_processing" not in st.session_state:
+    if process_pdf_btn:
+        # Remove selection prompt from the list
+        pdf_files.remove("Select PDF File")
         st.session_state.cancel_processing = False
 
-    def cancel_processing():
-        st.session_state.cancel_processing = True
-        st.session_state.process_pdf_clicked = False
+        # Stop button
+        stop_button_disabled = len(pdf_files) == 0
+        stop_button = st.button("Stop", on_click=cancel_processing, disabled=stop_button_disabled)
 
-    # Only enable Stop button if there are PDFs to process
-    stop_button_disabled = len(pdf_files) == 0
-    stop_button = st.button("Stop", on_click=cancel_processing, disabled=stop_button_disabled)
-    st.session_state.cancel_processing = False
+        total_files = len(pdf_files)
+        pdf_status = st.empty()
+        total_success = 0
+        total_failed = 0
+        total_skipped = 0
+        
+        with st.status(
+            f"Processing PDFs to {'Markdown and JSON' if export_to_markdown else 'JSON'} files...", expanded=True
+        ) as status:
+            for idx, pdf_filename in enumerate(pdf_files, 1):
+                if st.session_state.cancel_processing:
+                    status.warning("Processing canceled by user.")
+                    break
 
-    total_files = len(pdf_files)
-    pdf_status = st.empty()
-    total_success = 0
-    total_failed = 0
-    total_skipped = 0
-    with st.status(
-        f"Processing PDFs to {'Markdown and JSON' if export_to_markdown else 'JSON'} files...", expanded=True
-    ) as status:
-        for idx, pdf_filename in enumerate(pdf_files, 1):
-            if st.session_state.cancel_processing:
-                status.warning("Processing canceled by user.")
-                break
+                page_slot_status = st.empty()
+                pdf_status.info(f"Processing: {pdf_filename.split('.')[0]}")
 
-            page_slot_status = st.empty()
-            pdf_status.info(f"Processing: {pdf_filename.split('.')[0]}")
-
-            for log in process_pdf(
-                os.path.join(TEMP_DIR_PDF, pdf_filename),
-                create_markdown=export_to_markdown,
-                overwrite=False,
-                number_thread=number_thread,
-            ):
-                if log.get("status") == "info":
-                    msg = log.get("message", "SKIP")
-                    if "[SKIP]" in msg:
+                for log in process_pdf(
+                    os.path.join(TEMP_DIR_PDF, pdf_filename),
+                    create_markdown=export_to_markdown,
+                    overwrite=False,
+                    number_thread=number_thread,
+                ):
+                    if log.get("status") == "info":
+                        msg = log.get("message", "SKIP")
+                        if "[SKIP]" in msg:
+                            total_success += 1
+                            total_skipped += 1
+                        page_slot_status.info(log.get("message", "Processing skipped."))
+                    elif log.get("status") == "success":
                         total_success += 1
-                        total_skipped += 1
-                    page_slot_status.info(log.get("message", "Processing skipped."))
-                elif log.get("status") == "success":
-                    total_success += 1
-                    pdf_status.success(log.get("message", "Processing succeeded."))
-                elif log.get("status") == "error":
-                    total_failed += 1
-                    pdf_status.error(log.get("message", "Processing failed."))
-                else:
-                    st.write(log.get("message", "Processing failed."))
+                        pdf_status.success(log.get("message", "Processing succeeded."))
+                    elif log.get("status") == "error":
+                        total_failed += 1
+                        pdf_status.error(log.get("message", "Processing failed."))
+                    else:
+                        st.write(log.get("message", "Processing failed."))
 
-            status.update(
-                label=f"Processing: {idx}/{total_files} PDFs | Success {total_success} | Skipped {total_skipped} | Failed {total_failed}"
-            )
-            st.session_state.process_pdf_clicked = False
-            page_slot_status.empty()
+                status.update(
+                    label=f"Processing: {idx}/{total_files} PDFs | Success {total_success} | Skipped {total_skipped} | Failed {total_failed}"
+                )
+                st.session_state.process_pdf_clicked = False
+                page_slot_status.empty()
 
-        pdf_status.empty()
+            pdf_status.empty()
 
-        if not st.session_state.cancel_processing:
-            status.success(
-                f"PDFs converted to {'Markdown and JSON' if export_to_markdown else 'JSON'} files. Total Success: {total_success}, Skipped {total_skipped}, Failed: {total_failed}"
-            )
- 
-# PDF Preview and Markdown Result
-if not pdf_files or len(pdf_files) <= 1:
-    st.info("No PDFs available for preview.")
-    st.stop()
-else:
+            if not st.session_state.cancel_processing:
+                status.success(
+                    f"PDFs converted to {'Markdown and JSON' if export_to_markdown else 'JSON'} files. Total Success: {total_success}, Skipped {total_skipped}, Failed: {total_failed}"
+                )
+    
+    return pdf_files
+
+def render_pdf_preview(pdf_files):
+    if not pdf_files or len(pdf_files) <= 1:
+        st.info("No PDFs available for preview.")
+        return
+    
     query_pdf = st.selectbox(
         "Select PDF to preview",
         options=pdf_files,
         index=0,
         key="pdf_select",
     )
+    
     if query_pdf == "Select PDF File":
         st.warning("Please select a valid PDF file.")
-        st.stop()
+        return
 
-    doc = pymupdf.open(os.path.join(TEMP_DIR_PDF, query_pdf))
+    pdf_path = os.path.join(TEMP_DIR_PDF, query_pdf)
+    doc = pymupdf.open(pdf_path)
 
     if doc is None:
         st.error("Failed to open the PDF document.")
-        st.stop()
+        return
 
     if doc.page_count == 0:
         st.error("The PDF document is empty.")
-        st.stop()
+        return
 
     page_number = st.number_input(
         "Select Page Number",
@@ -357,18 +406,20 @@ else:
 
     with pdf:
         st.write("Selected PDF:")
-        pdf_path = os.path.join(TEMP_DIR_PDF, query_pdf)
-        pdf_viewer(pdf_path, width=900, height=700, pages_to_render=[page_number], key=f"pdf_viewer_{query_pdf.split('.')[0]}_{page_number}")
+        pdf_viewer(pdf_path, width=900, height=700, pages_to_render=[page_number], 
+                  key=f"pdf_viewer_{query_pdf.split('.')[0]}_{page_number}")
 
     with result:
         st.write("Markdown Result:")
         with st.container(key="markdown_result", height=600):
             pdf_id = query_pdf.split(".")[0]
             result_path = os.path.join(OUTPUT_DIR, pdf_id, pdf_id + ".json")
+            
             if os.path.exists(result_path):
                 with open(result_path, "r", encoding="utf-8") as f:
                     json_result = json.load(f)
                     content = json_result.get("content", [])
+                    
                     if 0 <= page_number - 1 < len(content):
                         selected_page = content[page_number - 1]["content"]
                         st.markdown(selected_page, unsafe_allow_html=True)
@@ -377,3 +428,44 @@ else:
             else:
                 st.info("No result JSON found for this PDF.")
 
+def main():
+    # Initialize
+    init_session_state()
+    setup_page()
+    
+    # Sidebar and settings
+    file_path, df, id_col, url_col, download_button, clear_temp_button, export_to_markdown, number_thread = render_sidebar()
+    
+    # Handle export confirmation dialog
+    if st.session_state.get("show_confirm_dialog", False):
+        confirmation_delete()
+    
+    if st.session_state.get("cancelled_export"):
+        st.toast("Export cancelled!", icon="❌")
+        st.session_state.cancelled_export = False
+
+    if st.session_state.get("already_exported"):
+        st.toast("Export completed!", icon="✅")
+        st.session_state.already_exported = False
+    
+    # Handle downloads
+    if download_button:
+        handle_download_pdfs(file_path, df, id_col, url_col)
+    
+    # Handle temp clearing
+    if clear_temp_button:
+        clear_temp_dir(TEMP_DIR)
+        if os.path.exists("exported_results.zip"):
+            os.remove("exported_results.zip")
+        st.sidebar.success("Temporary files cleared.")
+        st.rerun()
+    
+    # PDF processing
+    pdf_files = handle_pdf_processing(export_to_markdown, number_thread)
+    
+    # PDF Preview
+    if pdf_files:
+        render_pdf_preview(pdf_files)
+
+if __name__ == "__main__":
+    main()

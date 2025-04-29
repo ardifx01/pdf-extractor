@@ -46,7 +46,6 @@ def ensure_temp_dir():
     """Ensure the temporary directory exists."""
     os.makedirs(TEMP_DIR, exist_ok=True)
     os.makedirs(TEMP_DIR_PDF, exist_ok=True)
-    
 
 def download_pdf(id: str, url: str):
     """

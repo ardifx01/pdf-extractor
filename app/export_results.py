@@ -24,7 +24,6 @@ PDF_PATH = Path("app/pdf")
 TEMP_IMAGE_DIR = Path("app/temp/image")
 
 # --- Setup ---
-OUTPUT_DIR.mkdir(exist_ok=True)
 model = YOLO(MODEL_PATH_YOLO)
 
 
@@ -80,7 +79,7 @@ def extract_text_from_pdf_page(pdf_path, result_path, create_markdown, number_th
     accelerator_options = AcceleratorOptions(num_threads=number_thread, device=AcceleratorDevice.AUTO)
     pipeline_options = PdfPipelineOptions()
     pipeline_options.accelerator_options = accelerator_options
-    pipeline_options.do_ocr = True
+    # pipeline_options.do_ocr = True
     pipeline_options.do_table_structure = True
     pipeline_options.table_structure_options.do_cell_matching = True
     settings.debug.profile_pipeline_timings = True
@@ -110,7 +109,7 @@ def process_pdf(
     overwrite=True,
     number_thread: int = 4,
 ):
-    ensure_temp_dir()
+    OUTPUT_DIR.mkdir(exist_ok=True)
     knowledge_id = Path(pdf_file).stem
     pdf_path = pdf_file
 

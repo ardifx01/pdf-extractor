@@ -1,55 +1,44 @@
 # --- Builder Stage ---
 FROM python:3.12-slim-bookworm AS builder
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y  \
+# Install system dependencies - combined into one RUN to reduce layers
+RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     ca-certificates \
     gnupg \
     libgl1-mesa-glx \
     libglib2.0-0 \
-    && rm -rf /var/lib/apt/lists/*
+    && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
 # Install uv (fast package manager)
 ADD https://astral.sh/uv/install.sh /uv-installer.sh
 RUN sh /uv-installer.sh && rm /uv-installer.sh
 ENV PATH="/root/.local/bin/:$PATH"
 
-# Install Node.js
-RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
-    apt-get install -y nodejs && \
-    node -v && npm -v
-
-# Upgrade pip
-RUN pip install --no-cache-dir --upgrade pip
-
 # Set working directory
 WORKDIR /app
 
-# Copy requirements and install dependencies
+# Copy only requirements file and install dependencies
 COPY requirements-windows.txt .
 RUN uv pip install --no-cache-dir -r requirements-windows.txt --system
-
-# Copy the rest of the app
-COPY . /app/
 
 # --- Final Stage ---
 FROM python:3.12-slim-bookworm
 
-# Install runtime dependencies only
-# Install system dependencies
-RUN apt-get update && apt-get install -y  \
-    curl \
-    ca-certificates \
-    gnupg \
+# Install only runtime dependencies in a single layer
+RUN apt-get update && apt-get install -y --no-install-recommends \
     libgl1-mesa-glx \
     libglib2.0-0 \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install Node.js (if needed at runtime)
-RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
-    apt-get install -y nodejs && \
-    node -v && npm -v
+    curl \
+    gnupg \
+    && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/* \
+    && npm cache clean --force
 
 # Set working directory
 WORKDIR /app
@@ -57,7 +46,10 @@ WORKDIR /app
 # Copy installed Python packages and app from builder
 COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
 COPY --from=builder /usr/local/bin /usr/local/bin
-COPY --from=builder /app /app
+
+# Copy only necessary application files
+COPY app /app/app
+COPY *.py /app/
 
 # Expose Streamlit port
 EXPOSE 8501
