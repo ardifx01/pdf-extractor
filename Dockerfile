@@ -22,8 +22,8 @@ ENV PATH="/root/.local/bin/:$PATH"
 WORKDIR /app
 
 # Copy only requirements file and install dependencies
-COPY requirements-windows.txt .
-RUN uv pip install --no-cache-dir -r requirements-windows.txt --system
+COPY requirements.txt .
+RUN uv pip install --no-cache-dir -r requirements.txt --system
 
 # --- Final Stage ---
 FROM python:3.12-slim-bookworm
