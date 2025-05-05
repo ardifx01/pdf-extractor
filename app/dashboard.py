@@ -347,7 +347,9 @@ def handle_pdf_processing(export_to_markdown, number_thread):
                         pdf_status.success(log.get("message", "Processing succeeded."))
                     elif log.get("status") == "error":
                         total_failed += 1
-                        pdf_status.error(log.get("message", "Processing failed."))
+                        st.write(log.get("message", "Processing failed."))
+                    elif log.get("status") == "ocr_active":
+                        page_slot_status.info(log.get("message", "OCR is active."))
                     else:
                         st.write(log.get("message", "Processing failed."))
 
