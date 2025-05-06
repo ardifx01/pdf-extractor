@@ -23,6 +23,7 @@ WORKDIR /app
 
 # Copy only requirements file and install dependencies
 COPY requirements.txt .
+RUN uv pip install --no-cache-dir torch torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/cpu --system
 RUN uv pip install --no-cache-dir -r requirements.txt --system
 
 # --- Final Stage ---
