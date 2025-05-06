@@ -93,6 +93,7 @@ def prepare_export():
     time.sleep(0.5)  # Small delay simulation
     update_progress(0.9)
     clear_temp_dir(OUTPUT_DIR)
+    clear_temp_dir(TEMP_DIR)
 
     update_progress(1.0)
     time.sleep(0.5)
@@ -137,30 +138,33 @@ def render_sidebar():
     )
 
     # Dataset handling
-    dataset_file = st.sidebar.file_uploader(
-        "Upload Dataset (CSV/Excel/PDF)", type=["csv", "xlsx", "pdf"]
+    dataset_files = st.sidebar.file_uploader(
+        "Upload Dataset (CSV/Excel/PDF)", type=["csv", "xlsx", "pdf"], accept_multiple_files=True
     )
 
     df = None
     column_list = []
-    
-    if dataset_file:
-        
-        if re.search(r"\.(csv|xlsx)$", dataset_file.name, re.IGNORECASE):
-            temp_file_path = DATA_TEMP / dataset_file.name
-            with open(temp_file_path, "wb") as f:
-                f.write(dataset_file.getbuffer())
 
-            df = read_dataset(temp_file_path)
-            column_list = df.columns.tolist()
-            st.sidebar.success("Dataset loaded successfully!")
-        elif dataset_file.name.endswith(".pdf"):
-            # Save directly to TEMP_DIR_PDF
-            ensure_temp_dir()
-            temp_file_path = TEMP_DIR_PDF / dataset_file.name
-            with open(temp_file_path, "wb") as f:
-                f.write(dataset_file.getbuffer())
-                st.sidebar.success("PDF uploaded successfully!")
+    if dataset_files:
+        uploaded_slot = st.sidebar.empty()
+        for dataset_file in dataset_files:
+            temp_file_path = None
+
+            if re.search(r"\.(csv|xlsx)$", dataset_file.name, re.IGNORECASE):
+                temp_file_path = DATA_TEMP / dataset_file.name
+                with open(temp_file_path, "wb") as f:
+                    f.write(dataset_file.getbuffer())
+
+                df = read_dataset(temp_file_path)
+                column_list = df.columns.tolist()
+                uploaded_slot.success(f"Dataset '{dataset_file.name}' loaded successfully!")
+            elif dataset_file.name.endswith(".pdf"):
+                # Save directly to TEMP_DIR_PDF
+                ensure_temp_dir()
+                temp_file_path = TEMP_DIR_PDF / dataset_file.name
+                with open(temp_file_path, "wb") as f:
+                    f.write(dataset_file.getbuffer())
+                uploaded_slot.success(f"PDF '{dataset_file.name}' uploaded successfully!")
 
     else:
         # ensure to clear dataset
@@ -224,20 +228,24 @@ def confirmation_delete():
     with col1:
         if st.session_state.export_ready and st.session_state.zip_path:
             with open(st.session_state.zip_path, "rb") as f:
-               if st.download_button(
-                    label="Download Exported Results",
-                    data=f,
-                    file_name="exported_results.zip",
-                    mime="application/zip",
-                    use_container_width=True,
-                    key="download_zip",
-                    type="primary",
-                    icon=":material/download:",
-                    help="After downloading, all exported results will be deleted.",
-                ):
-                    st.session_state.show_confirm_dialog = False
-                    st.session_state.already_exported = True
-                    st.rerun()
+                zip_bytes = f.read()
+
+            if st.download_button(
+                label="Download Exported Results",
+                data=zip_bytes,
+                file_name="exported_results.zip",
+                mime="application/zip",
+                use_container_width=True,
+                key="download_zip",
+                type="primary",
+                icon=":material/download:",
+                help="After downloading, all exported results will be deleted.",
+            ):
+                st.session_state.show_confirm_dialog = False
+                st.session_state.already_exported = True
+                os.remove(st.session_state.zip_path)
+                del st.session_state.zip_path
+                st.rerun()
     with col2:
         if st.button("Cancel"):
             st.session_state.show_confirm_dialog = False
