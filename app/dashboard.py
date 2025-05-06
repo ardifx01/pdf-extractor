@@ -6,6 +6,7 @@ import torch
 import pymupdf
 import json
 import time
+import re
 from pathlib import Path
 
 from pdf_process import (
@@ -20,6 +21,13 @@ from export_results import (
     process_pdf,
     OUTPUT_DIR,
 )
+
+# Constants
+EXTENSION = {
+    "csv": [".csv"],
+    "xlsx": [".xlsx"],
+    "pdf": [".pdf"],
+}
 
 # Fix torch path handling
 torch.classes.__path__ = []
@@ -130,19 +138,30 @@ def render_sidebar():
 
     # Dataset handling
     dataset_file = st.sidebar.file_uploader(
-        "Upload Dataset (CSV/Excel)", type=["csv", "xlsx"]
+        "Upload Dataset (CSV/Excel/PDF)", type=["csv", "xlsx", "pdf"]
     )
 
     df = None
     column_list = []
     
     if dataset_file:
-        temp_file_path = DATA_TEMP / dataset_file.name
-        with open(temp_file_path, "wb") as f:
-            f.write(dataset_file.getbuffer())
+        
+        if re.search(r"\.(csv|xlsx)$", dataset_file.name, re.IGNORECASE):
+            temp_file_path = DATA_TEMP / dataset_file.name
+            with open(temp_file_path, "wb") as f:
+                f.write(dataset_file.getbuffer())
 
-        df = read_dataset(temp_file_path)
-        column_list = df.columns.tolist()
+            df = read_dataset(temp_file_path)
+            column_list = df.columns.tolist()
+            st.sidebar.success("Dataset loaded successfully!")
+        elif dataset_file.name.endswith(".pdf"):
+            # Save directly to TEMP_DIR_PDF
+            ensure_temp_dir()
+            temp_file_path = TEMP_DIR_PDF / dataset_file.name
+            with open(temp_file_path, "wb") as f:
+                f.write(dataset_file.getbuffer())
+                st.sidebar.success("PDF uploaded successfully!")
+
     else:
         # ensure to clear dataset
         shutil.rmtree(DATA_TEMP)
@@ -413,22 +432,45 @@ def render_pdf_preview(pdf_files):
 
     with result:
         st.write("Markdown Result:")
-        with st.container(key="markdown_result", height=600):
-            pdf_id = query_pdf.split(".")[0]
-            result_path = os.path.join(OUTPUT_DIR, pdf_id, pdf_id + ".json")
-            
-            if os.path.exists(result_path):
-                with open(result_path, "r", encoding="utf-8") as f:
-                    json_result = json.load(f)
-                    content = json_result.get("content", [])
-                    
-                    if 0 <= page_number - 1 < len(content):
-                        selected_page = content[page_number - 1]["content"]
+
+        @st.dialog("Markdown Result")
+        def raw_markdown(raw_markdown):
+            st.code(raw_markdown, language="markdown")
+            if st.button("Close"):
+                st.session_state.show_raw_markdown = False
+                st.session_state.raw_markdown_content = None
+                st.session_state.raw_markdown_pdf_id = None
+                st.session_state.raw_markdown_page_number = None
+                st.rerun()
+
+        pdf_id = query_pdf.split(".")[0]
+        result_path = os.path.join(OUTPUT_DIR, pdf_id, pdf_id + ".json")
+
+        if os.path.exists(result_path):
+            with open(result_path, "r", encoding="utf-8") as f:
+                json_result = json.load(f)
+                content = json_result.get("content", [])
+
+                if 0 <= page_number - 1 < len(content):
+                    selected_page = content[page_number - 1]["content"]
+                    raw_md_button = st.button(
+                        "Show Raw Markdown",
+                        key=f"raw_md_{pdf_id}_{page_number}",
+                        help="Click to view raw markdown content.",
+                    )
+                    if raw_md_button:
+                        st.session_state.show_raw_markdown = True
+                        st.session_state.raw_markdown_content = selected_page
+                        st.session_state.raw_markdown_pdf_id = pdf_id
+                        st.session_state.raw_markdown_page_number = page_number
+                        raw_markdown(selected_page)
+
+                    with st.container(key="markdown_result", height=600):
                         st.markdown(selected_page, unsafe_allow_html=True)
-                    else:
-                        st.info("No markdown content for this page.")
-            else:
-                st.info("No result JSON found for this PDF.")
+                else:
+                    st.info("No markdown content for this page.")
+        else:
+            st.info("No result JSON found for this PDF.")
 
 def main():
     # Initialize
