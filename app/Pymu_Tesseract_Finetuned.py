@@ -270,12 +270,10 @@ def process_pdf_pymu_tesseract(pdf_path, folder_output_path, overwrite=True):
     
     doc = fitz.open(pdf_path)
     output_data = {"content": [], "total_page": doc.page_count}
-
+    os.makedirs(folder_output_path, exist_ok=True)
 
     for page_number in range(len(doc)):
-    
-        
-        
+
         yield logging_process(
             "info",
             f"🚀 Starting process for file: {base_name}.pdf\n📄 Processing page {page_number + 1}/{len(doc)} pages"
@@ -293,10 +291,8 @@ def process_pdf_pymu_tesseract(pdf_path, folder_output_path, overwrite=True):
         del content, confidence
         gc.collect()
     
-    os.makedirs(folder_output_path, exist_ok=True)
-    
-    with open(output_path, "w", encoding="utf-8") as f:
-        json.dump(output_data, f, ensure_ascii=False, indent=2)
+        with open(output_path, "w+", encoding="utf-8") as f:
+            json.dump(output_data, f, ensure_ascii=False, indent=2)
 
     yield logging_process("success", f"Finished processing PDF: {base_name}")
         
