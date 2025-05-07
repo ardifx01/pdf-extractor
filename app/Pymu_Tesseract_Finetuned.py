@@ -258,7 +258,6 @@ def extract_pdf_single_page(doc, base_name, model_yolo, page_number):
 def process_pdf_pymu_tesseract(pdf_path, folder_output_path, overwrite=True):
     base_name = os.path.splitext(os.path.basename(pdf_path))[0]
     output_path = Path(folder_output_path) / f"{base_name}.json"
-    start_time = time.time()
     # start_ram = psutil.Process().memory_info().rss / 1024**2
 
     if not overwrite and check_json_file_exists(output_path):
@@ -271,8 +270,10 @@ def process_pdf_pymu_tesseract(pdf_path, folder_output_path, overwrite=True):
     doc = fitz.open(pdf_path)
     output_data = {"content": [], "total_page": doc.page_count}
     os.makedirs(folder_output_path, exist_ok=True)
+    total_times = 0
 
     for page_number in range(len(doc)):
+        start_time = time.time()
 
         yield logging_process(
             "info",
@@ -280,11 +281,16 @@ def process_pdf_pymu_tesseract(pdf_path, folder_output_path, overwrite=True):
         )
         content, confidence = extract_pdf_single_page(doc, base_name, model, page_number)
 
+        duration = round(time.time() - start_time, 2)
+
         output_data["content"].append({
             "page": page_number + 1,
             "content": content,
-            "confidence": confidence
+            "confidence": confidence,
+            "duration": duration,
         })
+
+        total_times += duration
 
         # print(f"📄 Halaman {page_number + 1} | Confidence: {confidence}")
         # print(f"🕒 Durasi: {time.time() - start_time:.2f} detik | RAM: {start_ram:+.2f} MB")
@@ -293,6 +299,11 @@ def process_pdf_pymu_tesseract(pdf_path, folder_output_path, overwrite=True):
     
         with open(output_path, "w+", encoding="utf-8") as f:
             json.dump(output_data, f, ensure_ascii=False, indent=2)
+    
+    output_data["total_time"] = round(total_times, 2)
+
+    with open(output_path, "w+", encoding="utf-8") as f:
+        json.dump(output_data, f, ensure_ascii=False, indent=2)
 
     yield logging_process("success", f"Finished processing PDF: {base_name}")
         

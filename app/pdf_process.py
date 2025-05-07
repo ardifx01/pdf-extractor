@@ -42,10 +42,9 @@ def is_pdf_valid_but_repaired(filename: str) -> bool:
         return False  # File bisa dibuka, tapi sebenarnya rusak
     return True
 
-def ensure_temp_dir():
+def ensure_temp_dir(dir_name: str | Path = TEMP_DIR):
     """Ensure the temporary directory exists."""
-    os.makedirs(TEMP_DIR, exist_ok=True)
-    os.makedirs(TEMP_DIR_PDF, exist_ok=True)
+    os.makedirs(dir_name, exist_ok=True)
 
 def download_pdf(id: str, url: str):
     """
@@ -59,7 +58,7 @@ def download_pdf(id: str, url: str):
     Yields:
         str: Status message.
     """
-    ensure_temp_dir()
+    ensure_temp_dir(TEMP_DIR_PDF)
     filename = os.path.join(TEMP_DIR_PDF, f"{id}.pdf")
     max_retries = 3
 
@@ -141,7 +140,7 @@ def handle_pdf_download_from_dataset(dataset_file: str, id_col: str, url_col: st
     Yields:
         str: Status message for each download attempt.
     """
-    ensure_temp_dir()
+    ensure_temp_dir(TEMP_DIR)
     df = read_dataset(dataset_file)
     for _, row in df.iterrows():
         id = str(row[id_col])

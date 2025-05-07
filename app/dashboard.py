@@ -133,7 +133,7 @@ def has_extracted_data(output_dir: str | Path, export_to_markdown: bool):
         # Use glob for efficient file matching
         extracted_files = glob(pathname="**/*.json", root_dir=output_dir, recursive=True)
     elif st.session_state["method_option"] == "PyMuPDF + Tesseract":
-        extracted_files = glob(pathname="*/*.json", root_dir=output_dir, recursive=True)
+        extracted_files = glob(pathname="**/*.json", root_dir=output_dir, recursive=True)
     else:
         extracted_files = [f for f in os.listdir(output_dir) if f.endswith(".json")]
 
@@ -207,7 +207,7 @@ def render_sidebar():
 
             elif dataset_file.name.endswith(".pdf"):
                 # Save directly to TEMP_DIR_PDF
-                ensure_temp_dir()
+                ensure_temp_dir(TEMP_DIR_PDF)
                 temp_file_path = TEMP_DIR_PDF / dataset_file.name
                 with open(temp_file_path, "wb") as f:
                     f.write(dataset_file.getbuffer())
@@ -275,6 +275,7 @@ def render_sidebar():
             st.rerun()
 
     # Export button
+    ensure_temp_dir(OUTPUT_DIR / "docling_results")
     export_disabled = has_extracted_data(OUTPUT_DIR, export_to_markdown)
     export_btn = st.sidebar.button(
         label="Export",
@@ -422,7 +423,7 @@ def handle_download_pdfs(file_path, df, id_col, url_col):
 def handle_pdf_processing(
     export_to_markdown, separate_result_dir, number_thread, overwrite
 ):
-    ensure_temp_dir()
+    ensure_temp_dir(TEMP_DIR_PDF)
     pdf_files = os.listdir(TEMP_DIR_PDF)
 
     if not pdf_files:
@@ -440,6 +441,12 @@ def handle_pdf_processing(
         options=["Docling", "PyMuPDF + Tesseract"],
         index=0,
         key="method_option",
+    )
+
+    ensure_temp_dir(
+        OUTPUT_DIR / "docling_results"
+        if method_option_select == "Docling"
+        else FOLDER_OUTPUT_PYMU_TESSERACT
     )
 
     process_pdf_btn = process_btn.button(
@@ -484,8 +491,6 @@ def handle_pdf_processing(
                 if method_option_select == "Docling":
                     output_dir = OUTPUT_DIR / "docling_results"
 
-                    output_dir.mkdir(parents=True, exist_ok=True)
-
                     for log in process_pdf(
                         os.path.join(TEMP_DIR_PDF, pdf_filename),
                         create_markdown=export_to_markdown,
@@ -525,7 +530,6 @@ def handle_pdf_processing(
                     page_processing_slot_status.empty()
 
                 if method_option_select == "PyMuPDF + Tesseract":
-                    FOLDER_OUTPUT_PYMU_TESSERACT.mkdir(parents=True, exist_ok=True)
                     for log in process_pdf_pymu_tesseract(
                         os.path.join(TEMP_DIR_PDF, pdf_filename),
                         folder_output_path=FOLDER_OUTPUT_PYMU_TESSERACT,
@@ -567,6 +571,7 @@ def handle_pdf_processing(
                 status.success(
                     f"PDFs converted to {'Markdown and JSON' if export_to_markdown else 'JSON'} files. Total Success: {total_success}, Skipped {total_skipped}, Failed: {total_failed}"
                 )
+            st.rerun()
 
     return pdf_files
 

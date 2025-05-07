@@ -95,7 +95,7 @@ def extract_text_from_pdf_page(
         },
     )
     conv_result = converter.convert(src_path)
-    doc_conversion_secs = conv_result.timings["pipeline_total"].times
+    doc_conversion_secs = round(conv_result.timings["pipeline_total"].times[0], 2)
     text = conv_result.document.export_to_markdown()
 
     if len(text) == 0 and force_full_page_ocr is False:
@@ -141,6 +141,7 @@ def process_pdf(
             temp_image_dir = TEMP_IMAGE_DIR / base_name
             temp_image_dir.mkdir(parents=True, exist_ok=True)
             total = pdf.page_count
+            total_times = 0
 
             for i, page in enumerate(pdf.pages()):
                 page_index = i + 1
@@ -205,12 +206,15 @@ def process_pdf(
                     {
                         "page": page_index,
                         "content": markdown_text,
+                        "duration": time_spent,
                     }
                 )
 
+                total_times += time_spent
+
                 yield logging_process(
                     "info",
-                    f"Processed page {page_index}/{pdf.page_count} of {base_name} in {time_spent[0]:.2f} seconds."
+                    f"Processed page {page_index}/{pdf.page_count} of {base_name} in {time_spent} seconds."
                 )
 
                 del (
@@ -228,6 +232,12 @@ def process_pdf(
 
                 with open(json_result_path, "w+", encoding="utf-8") as json_file:
                     json.dump(result_json, json_file, ensure_ascii=False, indent=2)
+        
+            # Save the total time taken for processing the PDF
+            result_json["total_time"] = round(total_times, 2)
+
+            with open(json_result_path, "w+", encoding="utf-8") as json_file:
+                json.dump(result_json, json_file, ensure_ascii=False, indent=2)
 
         # Remove temp PDF files
         for f in result_dir.glob("*.pdf"):
