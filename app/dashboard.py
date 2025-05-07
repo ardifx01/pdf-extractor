@@ -51,6 +51,8 @@ def init_session_state():
         st.session_state.data_temp = DATA_TEMP
     if "already_exported" not in st.session_state:
         st.session_state.already_exported = False
+    if "error_archive" not in st.session_state:
+        st.session_state.error_archive = False
 
 # Configure page
 def setup_page():
@@ -85,9 +87,8 @@ def prepare_export():
 
     try:
         st.session_state.zip_path = zip_for_download(progress_callback=update_progress)
-    except Exception as e:
-        st.error(f"Error during export preparation: {e}")
-        st.info("Maybe you haven't started extraction yet?")
+    except Exception:
+        st.session_state.error_archive = True
         return
 
     time.sleep(0.5)  # Small delay simulation
@@ -112,7 +113,7 @@ def has_extracted_data(output_dir: str | Path, export_to_markdown: bool):
     else:
         extracted_files = [f for f in os.listdir(output_dir) if f.endswith('.json')]
     
-    return len(extracted_files) > 0
+    return False if len(extracted_files) > 0 else True
 
 def process_pdf_click():
     st.session_state.process_pdf_clicked = True
@@ -134,7 +135,7 @@ def render_sidebar():
 
     export_to_markdown = st.sidebar.checkbox("Export to Markdown", value=False)
     separate_result_dir = st.sidebar.checkbox(
-        "Create separate result directory", value=True
+        "Create separate result directory", value=export_to_markdown, help="Create a separate folder for each PDF file. True if exporting to Markdown."
     )
 
     # Dataset handling
@@ -208,7 +209,7 @@ def render_sidebar():
         prepare_export()
         st.session_state.show_confirm_dialog = True
 
-    return temp_file_path, df, id_col, url_col, download_button, clear_temp_button, export_to_markdown, number_thread
+    return temp_file_path, df, id_col, url_col, download_button, clear_temp_button, export_to_markdown, number_thread, separate_result_dir
 
 @st.dialog("Warning: Export will delete all results ⚠ ")
 def confirmation_delete():
@@ -224,6 +225,9 @@ def confirmation_delete():
         - After export, all result files in the output directory will be deleted to free up space.
         """
     )
+    if st.session_state.error_archive:
+        st.error("Error during export preparation")
+        st.info("Maybe you haven't started extraction yet?")
     col1, col2 = st.columns(2)
     with col1:
         if st.session_state.export_ready and st.session_state.zip_path:
@@ -316,29 +320,32 @@ def handle_download_pdfs(file_path, df, id_col, url_col):
     else:
         st.sidebar.error("Please upload a dataset and select ID and URL columns.")
 
-def handle_pdf_processing(export_to_markdown, number_thread):
+def handle_pdf_processing(export_to_markdown, separate_result_dir, number_thread):
     ensure_temp_dir()
-    pdf_files = ["Select PDF File"] + os.listdir(TEMP_DIR_PDF)
+    pdf_files = os.listdir(TEMP_DIR_PDF)
     
-    if not pdf_files or pdf_files == ["Select PDF File"]:
+    if not pdf_files:
         st.warning("No PDF files found in the temporary PDF directory. Please upload or download PDFs first.")
         return None
     
     process_pdf_btn = st.button(
         "Process PDF",
         key="process_pdf",
-        disabled=False if pdf_files and len(pdf_files) > 1 else True,
+        disabled=False if pdf_files else True,
         on_click=process_pdf_click,
     )
 
     if process_pdf_btn:
-        # Remove selection prompt from the list
-        pdf_files.remove("Select PDF File")
-        st.session_state.cancel_processing = False
+        # st.session_state.cancel_processing = False
 
         # Stop button
-        stop_button_disabled = len(pdf_files) == 0
-        stop_button = st.button("Stop", on_click=cancel_processing, disabled=stop_button_disabled)
+        stop_button_disabled = st.session_state.cancel_processing
+
+        if st.session_state.process_pdf_clicked:
+            st.session_state.cancel_processing = False
+            st.session_state.process_pdf_clicked = False
+
+            stop_button = st.button("Stop", on_click=cancel_processing, disabled=stop_button_disabled)
 
         total_files = len(pdf_files)
         pdf_status = st.empty()
@@ -361,6 +368,7 @@ def handle_pdf_processing(export_to_markdown, number_thread):
                     os.path.join(TEMP_DIR_PDF, pdf_filename),
                     create_markdown=export_to_markdown,
                     overwrite=False,
+                    separate_result_dir=separate_result_dir,
                     number_thread=number_thread,
                 ):
                     if log.get("status") == "info":
@@ -395,8 +403,8 @@ def handle_pdf_processing(export_to_markdown, number_thread):
     
     return pdf_files
 
-def render_pdf_preview(pdf_files):
-    if not pdf_files or len(pdf_files) <= 1:
+def render_pdf_preview(pdf_files, export_to_markdown):
+    if not pdf_files or len(pdf_files) == 0:
         st.info("No PDFs available for preview.")
         return
     
@@ -452,7 +460,11 @@ def render_pdf_preview(pdf_files):
                 st.rerun()
 
         pdf_id = query_pdf.split(".")[0]
-        result_path = os.path.join(OUTPUT_DIR, pdf_id, pdf_id + ".json")
+
+        if export_to_markdown:
+            result_path = os.path.join(OUTPUT_DIR, pdf_id, pdf_id + ".json")
+        else:
+            result_path = os.path.join(OUTPUT_DIR, pdf_id + ".json")
 
         if os.path.exists(result_path):
             with open(result_path, "r", encoding="utf-8") as f:
@@ -486,7 +498,7 @@ def main():
     setup_page()
     
     # Sidebar and settings
-    file_path, df, id_col, url_col, download_button, clear_temp_button, export_to_markdown, number_thread = render_sidebar()
+    file_path, df, id_col, url_col, download_button, clear_temp_button, export_to_markdown, number_thread, separate_result_dir = render_sidebar()
     
     # Handle export confirmation dialog
     if st.session_state.get("show_confirm_dialog", False):
@@ -513,11 +525,10 @@ def main():
         st.rerun()
     
     # PDF processing
-    pdf_files = handle_pdf_processing(export_to_markdown, number_thread)
+    pdf_files = handle_pdf_processing(export_to_markdown, separate_result_dir, number_thread)
     
     # PDF Preview
     if pdf_files:
-        render_pdf_preview(pdf_files)
+        render_pdf_preview(pdf_files, export_to_markdown)
 
-if __name__ == "__main__":
-    main()
+main()

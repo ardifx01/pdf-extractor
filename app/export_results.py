@@ -1,8 +1,8 @@
 from pathlib import Path
-import os
 import gc
 import shutil
 import json
+import os
 import pymupdf
 from pymupdf import Page
 from ultralytics import YOLO
@@ -11,13 +11,12 @@ from docling.datamodel.pipeline_options import (
     AcceleratorDevice,
     AcceleratorOptions,
     PdfPipelineOptions,
-    TesseractCliOcrOptions,
-    EasyOcrOptions
+    EasyOcrOptions,
+    RapidOcrOptions,
 )
 from docling.datamodel.settings import settings
 from docling.document_converter import DocumentConverter, PdfFormatOption
-
-from pdf_process import ensure_temp_dir
+from huggingface_hub import snapshot_download
 
 # --- Constants ---
 OUTPUT_DIR = Path("app/results")
@@ -28,39 +27,11 @@ TEMP_IMAGE_DIR = Path("app/temp/image")
 # --- Setup ---
 model = YOLO(MODEL_PATH_YOLO)
 
-
-def log_info(message: str):
+def logging_process(status: str, message: str):
     return {
-        "status": "info",
+        "status": status,
         "message": message,
     }
-
-
-def log_success(message: str):
-    return {
-        "status": "success",
-        "message": message,
-    }
-
-
-def log_warning(message: str):
-    return {
-        "status": "warning",
-        "message": message,
-    }
-
-def log_ocr_active(message: str):
-    return {
-        "status": "ocr_active",
-        "message": message,
-    }
-
-def log_error(message: str):
-    return {
-        "status": "error",
-        "message": message,
-    }
-
 
 # --- PDF Utilities ---
 def yolo_to_pdf_rectangles(boxes, zoom):
@@ -82,8 +53,26 @@ def draw_bounding_boxes(page: Page, rectangles: list[pymupdf.Rect]):
     return page
 
 
-def extract_text_from_pdf_page(pdf_path, result_path, create_markdown, number_thread, force_full_page_ocr= False):
-    accelerator_options = AcceleratorOptions(num_threads=number_thread, device=AcceleratorDevice.AUTO)
+def extract_text_from_pdf_page(
+    src_path, result_path, create_markdown, number_thread, force_full_page_ocr=False
+):
+    """Extract text from a PDF page using OCR if necessary.
+    
+    Args:
+        - src_path (str): Path to the source PDF file.
+        - result_path (str): Path to save the result.
+        - create_markdown (bool): Whether to create a markdown file.
+        - number_thread (int): Number of threads to use for OCR.
+        - force_full_page_ocr (bool): Whether to force full page OCR. Default is False.
+    
+    Returns:
+        - text (str): Extracted text from the PDF page.
+        - doc_conversion_secs (float): Time taken for document conversion.
+    """
+
+    accelerator_options = AcceleratorOptions(
+        num_threads=number_thread, device=AcceleratorDevice.AUTO
+    )
     pipeline_options = PdfPipelineOptions()
     pipeline_options.accelerator_options = accelerator_options
     pipeline_options.do_ocr = True
@@ -93,6 +82,8 @@ def extract_text_from_pdf_page(pdf_path, result_path, create_markdown, number_th
 
     # pipeline_options.ocr_options = TesseractCliOcrOptions(
     #     lang=["eng", "id"],
+    #     force_full_page_ocr=force_full_page_ocr,
+    #     tesseract_cmd="tesseract",
     # )
 
     pipeline_options.ocr_options = EasyOcrOptions(
@@ -107,7 +98,7 @@ def extract_text_from_pdf_page(pdf_path, result_path, create_markdown, number_th
             InputFormat.IMAGE: PdfFormatOption(pipeline_options=pipeline_options),
         },
     )
-    conv_result = converter.convert(pdf_path)
+    conv_result = converter.convert(src_path)
     doc_conversion_secs = conv_result.timings["pipeline_total"].times
     text = conv_result.document.export_to_markdown()
 
@@ -119,7 +110,9 @@ def extract_text_from_pdf_page(pdf_path, result_path, create_markdown, number_th
         md_filename = f"{result_path}.md"
         with open(md_filename, "w+", encoding="utf-8") as md_file:
             md_file.write(text)
+
     return text, doc_conversion_secs
+
 
 def is_scanned_pdf(pdf_path: str) -> bool:
     with pymupdf.open(pdf_path) as pdf:
@@ -129,6 +122,7 @@ def is_scanned_pdf(pdf_path: str) -> bool:
             return False
         # Check if the first page has any images
         return True if first_page.get_images(full=True) else False
+
 
 def process_pdf(
     pdf_file: str,
@@ -150,11 +144,17 @@ def process_pdf(
         result_dir = OUTPUT_DIR
         json_result_path = result_dir / f"{knowledge_id}.json"
 
-    if not overwrite and json_result_path.exists():
-        yield log_info(
-            f"[SKIP] JSON result already exists for {knowledge_id}, skipping."
-        )
-        return
+    # Read json result if exists
+    if json_result_path.exists():
+        json_content = json.loads(json_result_path.read_text(encoding="utf-8"))
+        total_pages = json_content.get("total_page", 0) or 0
+        total_page_extracted = len(json_content.get("content", [])) or 0
+
+        if not overwrite and total_pages == total_page_extracted:
+            yield logging_process(
+                "info", f"[SKIP] JSON result already exists for {knowledge_id}, skipping."
+            )
+            return
 
     try:
         with pymupdf.open(pdf_path) as pdf:
@@ -199,7 +199,7 @@ def process_pdf(
                         widgets=False,
                     )
                     temp_pdf.save(str(page_pdf_path), garbage=4, deflate=True)
-                
+
                 # Checking if the PDF is scanned and needs OCR
                 markdown_text, time_spent = extract_text_from_pdf_page(
                     page_pdf_path,
@@ -209,7 +209,8 @@ def process_pdf(
                 )
 
                 if markdown_text is None:
-                    yield log_ocr_active(
+                    yield logging_process(
+                        "info",
                         f"Page {page_index}/{pdf.page_count} of {knowledge_id} is empty, running OCR again."
                     )
                     # If the text is empty, it might be a scanned PDF, so we run OCR again with force_full_page_ocr=True
@@ -218,7 +219,7 @@ def process_pdf(
                         result_dir / f"{knowledge_id}-page-{page_index}",
                         create_markdown,
                         number_thread,
-                        force_full_page_ocr=True
+                        force_full_page_ocr=True,
                     )
 
                 result_json["content"].append(
@@ -228,25 +229,39 @@ def process_pdf(
                     }
                 )
 
-                yield log_info(
+                yield logging_process(
+                    "info",
                     f"Processed page {page_index}/{pdf.page_count} of {knowledge_id} in {time_spent[0]:.2f} seconds."
                 )
 
-                del mat, page_image, results, boxes, rectangles, result_dict, page_pdf_path, markdown_text
+                del (
+                    mat,
+                    page_image,
+                    results,
+                    boxes,
+                    rectangles,
+                    result_dict,
+                    page_pdf_path,
+                    markdown_text,
+                    time_spent,
+                )
                 gc.collect()
-            
-                
 
-        with open(json_result_path, "w", encoding="utf-8") as json_file:
-            json.dump(result_json, json_file, ensure_ascii=False, indent=2)
+                with open(json_result_path, "w+", encoding="utf-8") as json_file:
+                    json.dump(result_json, json_file, ensure_ascii=False, indent=2)
 
         # Remove temp PDF files
         for f in result_dir.glob("*.pdf"):
             f.unlink()
         shutil.rmtree(temp_image_dir, ignore_errors=True)
 
-        yield log_success(f"Finished processing PDF: {knowledge_id}")
+        yield logging_process(
+            "info",
+            f"Finished processing PDF: {knowledge_id}"
+        )
 
     except Exception as e:
-        yield log_error(f"Failed to process PDF {idx + 1}/{total}: {e}")
-        
+        yield logging_process(
+            "error",
+            f"Failed to process PDF {idx + 1}/{total}: {e}"
+        )
