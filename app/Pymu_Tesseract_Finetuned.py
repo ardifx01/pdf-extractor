@@ -9,14 +9,19 @@ from ultralytics import YOLO
 import re
 import gc
 import pandas as pd
+import time
+from pathlib import Path
 
 from export_results import (
     MODEL_PATH_YOLO,
     OUTPUT_DIR,
 )
 
+from helper import logging_process, check_json_file_exists
+
+FOLDER_OUTPUT_PYMU_TESSERACT = OUTPUT_DIR / "pymu_tesseract_finetuned"
+
 model = YOLO(MODEL_PATH_YOLO)
-folder_output_path = OUTPUT_DIR + "pymu_tesseract_finetuned"
 
 def page_to_image(page, dpi=300):
     zoom = dpi / 72
@@ -208,28 +213,33 @@ def extract_pdf_single_page(doc, base_name, model_yolo, page_number):
 
                 raw_text, confidence = extract_text_from_image(working_image2)
                 confidences.append(confidence)
-                combined_content += f"\n{raw_text}\n"
-    
+                combined_content += f"\n\n{raw_text}\n\n"
+
+                del working_image2, draw2
 
             elif label.startswith("Table"):
                 # Masking seluruh objek kecuali tabel saat ini
                 for bbox, table in zip(info["bbox"], info["objects"]):
                     rows = table.extract()
                     if rows:  # Cek apakah ada data hasil ekstraksi
-                        combined_content += f"\n{label}:\n"
+                        combined_content += f"\n\n{label}:\n\n"
                         for row in rows:
-                            combined_content += f"{row}\n"
+                            combined_content += f"{row}\n\n"
                     else:
-                        # print(f"⚠️ Tabel pada File {base_name} di hlaman {page_number + 1} {label} tidak memiliki data untuk diekstrak.")
+                        # yield logging_process(
+                        #     "warning",
+                        #     f"⚠️ Table in File {base_name} on page {page_number + 1} {label} has no data to extract."
+                        # )
+                        continue
         
         # working_image1.save(f"temp_masked.png")
         raw_text, confidence = extract_text_from_image(working_image1)
-        combined_content += f"\n{raw_text}\n"
+        combined_content += f"\n\n{raw_text}\n\n"
 
         combined_content = clean_text(combined_content)
         avg_confidence = round(sum(confidences) / len(confidences), 2) if confidences else 0.0
 
-        del working_image1, working_image2, draw1, draw2, table_bounding_box, text_bounding_box, combined_data
+        del working_image1, draw1, table_bounding_box, text_bounding_box, combined_data
         gc.collect()
 
         return combined_content, avg_confidence
@@ -238,31 +248,41 @@ def extract_pdf_single_page(doc, base_name, model_yolo, page_number):
         combined_content = ""
         # Jika tidak ada tabel, hanya ambil teks dari gambar yang sudah dimask
         raw_text, confidence = extract_text_from_image(mask_image)
-        combined_content += f"\n{raw_text}\n"
+        combined_content += f"\n\n{raw_text}\n\n"
 
         combined_content = clean_text(combined_content)
-
-        del working_image1, working_image2, draw1, draw2, table_bounding_box, text_bounding_box, combined_data
-        gc.collect()
         
         return combined_content, confidence
 
 
-def process_pdf_and_update_csv(pdf_path, folder_output_path):
-
+def process_pdf_pymu_tesseract(pdf_path, folder_output_path, overwrite=True):
     base_name = os.path.splitext(os.path.basename(pdf_path))[0]
-    # start_time = time.time()
+    output_path = Path(folder_output_path) / f"{base_name}.json"
+    start_time = time.time()
     # start_ram = psutil.Process().memory_info().rss / 1024**2
 
+    if not overwrite and check_json_file_exists(output_path):
+        yield logging_process(
+            "info",
+            f"[SKIP] JSON result already exists for {base_name}.pdf, skipping.",
+        )
+        return
+    
     doc = fitz.open(pdf_path)
-    output_data = []
+    output_data = {"content": [], "total_page": doc.page_count}
+
 
     for page_number in range(len(doc)):
     
-        # print(f"\n🚀 Memulai proses untuk file: {base_name}.pdf\n📄 Memproses halaman {page_number + 1} dari {len(doc)} halaman")
-        content, confidence = extract_pdf_single_page(doc,base_name, model, page_number)
+        
+        
+        yield logging_process(
+            "info",
+            f"🚀 Starting process for file: {base_name}.pdf\n📄 Processing page {page_number + 1}/{len(doc)} pages"
+        )
+        content, confidence = extract_pdf_single_page(doc, base_name, model, page_number)
 
-        output_data.append({
+        output_data["content"].append({
             "page": page_number + 1,
             "content": content,
             "confidence": confidence
@@ -275,9 +295,10 @@ def process_pdf_and_update_csv(pdf_path, folder_output_path):
     
     os.makedirs(folder_output_path, exist_ok=True)
     
-    output_path = os.path.join(folder_output_path, f"{base_name}.json")
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(output_data, f, ensure_ascii=False, indent=2)
+
+    yield logging_process("success", f"Finished processing PDF: {base_name}")
         
     # print(f"\nDurasi total 1 File:{base_name}.pdf {time.time() - start_time:.2f} detik")
 

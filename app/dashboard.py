@@ -8,6 +8,7 @@ import json
 import time
 import re
 from pathlib import Path
+from glob import glob
 
 from pdf_process import (
     handle_pdf_download_from_dataset,
@@ -22,6 +23,11 @@ from export_results import (
     OUTPUT_DIR,
 )
 
+from Pymu_Tesseract_Finetuned import (
+    process_pdf_pymu_tesseract,
+    FOLDER_OUTPUT_PYMU_TESSERACT,
+)
+
 # Constants
 EXTENSION = {
     "csv": [".csv"],
@@ -32,8 +38,9 @@ EXTENSION = {
 # Fix torch path handling
 torch.classes.__path__ = []
 
-DATA_TEMP = Path("app/temp/data")
+DATA_TEMP = Path("app/temp/")
 os.makedirs(DATA_TEMP, exist_ok=True)
+
 
 # Initialize session state variables
 def init_session_state():
@@ -53,11 +60,15 @@ def init_session_state():
         st.session_state.already_exported = False
     if "error_archive" not in st.session_state:
         st.session_state.error_archive = False
+    if "method_option" not in st.session_state:
+        st.session_state.method_option = None
+
 
 # Configure page
 def setup_page():
     st.set_page_config(page_title="PDF Processing Dashboard", layout="wide")
     st.title("PDF Processing Dashboard")
+
 
 # Utility functions
 def zip_for_download(progress_callback=None):
@@ -78,6 +89,7 @@ def zip_for_download(progress_callback=None):
         progress_callback(0.7)  # 70% after zip creation
 
     return zip_path
+
 
 def prepare_export():
     progress_bar = st.sidebar.progress(0, text="Preparing export...")
@@ -102,25 +114,35 @@ def prepare_export():
     st.session_state.export_ready = True
     progress_bar.empty()
 
+
 def has_extracted_data(output_dir: str | Path, export_to_markdown: bool):
     if not os.path.exists(output_dir):
         return False
     
+    if st.session_state.method_option == "Docling":
+        output_dir = os.path.join(output_dir, "docling_results")
+    elif st.session_state.method_option == "PyMuPDF + Tesseract":
+        output_dir = FOLDER_OUTPUT_PYMU_TESSERACT
+
     if export_to_markdown:
-        # Check subfolder contents
-        check_dir = os.listdir(output_dir)
-        extracted_files = [f for f in check_dir if os.path.isfile(os.path.join(output_dir, f)) and f.endswith('.json')]
+        # Use glob for efficient file matching
+        extracted_files = glob(pathname="**/*.json", root_dir=output_dir, recursive=True)
+    elif st.session_state.method_option == "PyMuPDF + Tesseract":
+        extracted_files = glob(pathname="*/*.json", root_dir=output_dir, recursive=True)
     else:
-        extracted_files = [f for f in os.listdir(output_dir) if f.endswith('.json')]
-    
+        extracted_files = [f for f in os.listdir(output_dir) if f.endswith(".json")]
+
     return False if len(extracted_files) > 0 else True
+
 
 def process_pdf_click():
     st.session_state.process_pdf_clicked = True
 
+
 def cancel_processing():
     st.session_state.cancel_processing = True
     st.session_state.process_pdf_clicked = False
+
 
 # UI Components
 def render_sidebar():
@@ -130,17 +152,31 @@ def render_sidebar():
     # Processing options
     number_thread = st.sidebar.number_input(
         "Number of Threads",
-        min_value=1, max_value=64, value=4, step=1, key="number_thread"
+        min_value=1,
+        max_value=64,
+        value=4,
+        step=1,
+        key="number_thread",
     )
 
     export_to_markdown = st.sidebar.checkbox("Export to Markdown", value=False)
     separate_result_dir = st.sidebar.checkbox(
-        "Create separate result directory", value=export_to_markdown, help="Create a separate folder for each PDF file. True if exporting to Markdown."
+        "Create separate result directory",
+        value=export_to_markdown,
+        help="Create a separate folder for each PDF file. True if exporting to Markdown.",
+    )
+    overwrite = st.sidebar.toggle(
+        "Overwrite existing files",
+        value=False,
+        help="Overwrite existing files if they exist.",
+        key="overwrite",
     )
 
     # Dataset handling
     dataset_files = st.sidebar.file_uploader(
-        "Upload Dataset (CSV/Excel/PDF)", type=["csv", "xlsx", "pdf"], accept_multiple_files=True
+        "Upload Dataset (CSV/Excel/PDF)",
+        type=["csv", "xlsx", "pdf"],
+        accept_multiple_files=True,
     )
 
     df = None
@@ -158,19 +194,23 @@ def render_sidebar():
 
                 df = read_dataset(temp_file_path)
                 column_list = df.columns.tolist()
-                uploaded_slot.success(f"Dataset '{dataset_file.name}' loaded successfully!")
+                uploaded_slot.success(
+                    f"Dataset '{dataset_file.name}' loaded successfully!"
+                )
             elif dataset_file.name.endswith(".pdf"):
                 # Save directly to TEMP_DIR_PDF
                 ensure_temp_dir()
                 temp_file_path = TEMP_DIR_PDF / dataset_file.name
                 with open(temp_file_path, "wb") as f:
                     f.write(dataset_file.getbuffer())
-                uploaded_slot.success(f"PDF '{dataset_file.name}' uploaded successfully!")
+                uploaded_slot.success(
+                    f"PDF '{dataset_file.name}' uploaded successfully!"
+                )
 
     else:
-        # ensure to clear dataset
-        shutil.rmtree(DATA_TEMP)
-        st.sidebar.warning("No dataset file uploaded. Please upload a CSV or Excel file.")
+        st.sidebar.warning(
+            "No dataset file uploaded. Please upload a CSV or Excel file."
+        )
         temp_file_path = None
         df = None
         column_list = []
@@ -185,31 +225,57 @@ def render_sidebar():
 
     # Action buttons
     download_col, clear_temp_col = st.sidebar.columns(2, vertical_alignment="bottom")
-    
+
     with download_col:
-        download_button = st.button("Download", type="primary", key="download_pdfs", 
-                                   icon=":material/download:", help="Download PDFs from the dataset.")
+        download_button = st.button(
+            "Download",
+            type="primary",
+            key="download_pdfs",
+            icon=":material/download:",
+            help="Download PDFs from the dataset.",
+        )
 
     with clear_temp_col:
-        clear_temp_button = st.button("Temp Files", icon=":material/delete:", 
-                                     help="Clear temporary files after processing.")
-    
+        clear_temp_button = st.button(
+            "Temp Files",
+            icon=":material/delete:",
+            help="Clear temporary all files, including PDFs and results.",
+        )
+        if clear_temp_button:
+            clear_temp_dir(DATA_TEMP)
+            clear_temp_dir(OUTPUT_DIR)
+            st.success("Temporary files cleared successfully.")
+
     # Export button
     export_disabled = has_extracted_data(OUTPUT_DIR, export_to_markdown)
     export_btn = st.sidebar.button(
         label="Export",
         disabled=export_disabled,
-        help="No extracted files yet!" if export_disabled else "Export all extracted results as ZIP",
+        help="No extracted files yet!"
+        if export_disabled
+        else "Export all extracted results as ZIP",
         icon=":material/publish:",
         use_container_width=True,
-        key="export_btn"
+        key="export_btn",
     )
 
     if export_btn and not export_disabled:
         prepare_export()
         st.session_state.show_confirm_dialog = True
 
-    return temp_file_path, df, id_col, url_col, download_button, clear_temp_button, export_to_markdown, number_thread, separate_result_dir
+    return (
+        temp_file_path,
+        df,
+        id_col,
+        url_col,
+        download_button,
+        clear_temp_button,
+        export_to_markdown,
+        number_thread,
+        separate_result_dir,
+        overwrite,
+    )
+
 
 @st.dialog("Warning: Export will delete all results ⚠ ")
 def confirmation_delete():
@@ -256,23 +322,24 @@ def confirmation_delete():
             st.session_state.cancelled_export = True
             st.rerun()
 
+
 def handle_download_pdfs(file_path, df, id_col, url_col):
     if df is not None and id_col != url_col:
         total_pdf_files = df[url_col].nunique()
         total_processing = 0
         total_success = 0
         failed_files = []
-        
+
         with st.status("Downloading PDFs...", expanded=True) as status:
-            results = handle_pdf_download_from_dataset(
-                file_path, id_col, url_col
-            )
+            results = handle_pdf_download_from_dataset(file_path, id_col, url_col)
             download_slot = st.empty()
-            
+
             for result in results:
                 total_processing += 1
-                status.update(label=f"Downloading ({total_processing}/{total_pdf_files}) PDFs...")
-                
+                status.update(
+                    label=f"Downloading ({total_processing}/{total_pdf_files}) PDFs..."
+                )
+
                 if result.get("status") == "success":
                     total_success += 1
                     download_slot.success(result.get("message", "Download succeeded."))
@@ -287,23 +354,27 @@ def handle_download_pdfs(file_path, df, id_col, url_col):
             if len(failed_files) > 0:
                 st.info(f"Retrying {len(failed_files)} failed downloads...")
                 retry_results = []
-                
+
                 for fail in failed_files:
                     row_id = fail.get("id")
                     url = fail.get("url")
-                    
+
                     if row_id is not None and url is not None:
                         retry_df = df[(df[id_col] == row_id) & (df[url_col] == url)]
-                        
+
                         if not retry_df.empty:
                             retry_result = handle_pdf_download_from_dataset(
                                 retry_df, id_col, url_col
                             )
-                            
+
                             for r in retry_result:
                                 if r.get("status") in ["success", "info"]:
                                     total_success += 1
-                                    status_type = "success" if r.get("status") == "success" else "info"
+                                    status_type = (
+                                        "success"
+                                        if r.get("status") == "success"
+                                        else "info"
+                                    )
                                     getattr(download_slot, status_type)(
                                         f"Retry: {r.get('message', 'Download succeeded.' if status_type == 'success' else 'Download skipped.')}"
                                     )
@@ -320,15 +391,31 @@ def handle_download_pdfs(file_path, df, id_col, url_col):
     else:
         st.sidebar.error("Please upload a dataset and select ID and URL columns.")
 
-def handle_pdf_processing(export_to_markdown, separate_result_dir, number_thread):
+
+def handle_pdf_processing(
+    export_to_markdown, separate_result_dir, number_thread, overwrite
+):
     ensure_temp_dir()
     pdf_files = os.listdir(TEMP_DIR_PDF)
-    
+
     if not pdf_files:
-        st.warning("No PDF files found in the temporary PDF directory. Please upload or download PDFs first.")
+        st.warning(
+            "No PDF files found in the temporary PDF directory. Please upload or download PDFs first."
+        )
         return None
-    
-    process_pdf_btn = st.button(
+
+    process_btn, method_options = st.columns(
+        2, gap="small", vertical_alignment="bottom"
+    )
+
+    method_option_select = method_options.selectbox(
+        "Select Processing Method",
+        options=["Docling", "PyMuPDF + Tesseract"],
+        index=0,
+        key="method_option",
+    )
+
+    process_pdf_btn = process_btn.button(
         "Process PDF",
         key="process_pdf",
         disabled=False if pdf_files else True,
@@ -336,7 +423,7 @@ def handle_pdf_processing(export_to_markdown, separate_result_dir, number_thread
     )
 
     if process_pdf_btn:
-        # st.session_state.cancel_processing = False
+        st.session_state.cancel_processing = False  # Uncommented to enable processing
 
         # Stop button
         stop_button_disabled = st.session_state.cancel_processing
@@ -345,54 +432,101 @@ def handle_pdf_processing(export_to_markdown, separate_result_dir, number_thread
             st.session_state.cancel_processing = False
             st.session_state.process_pdf_clicked = False
 
-            stop_button = st.button("Stop", on_click=cancel_processing, disabled=stop_button_disabled)
+            stop_button = st.button(
+                "Stop", on_click=cancel_processing, disabled=stop_button_disabled
+            )
 
         total_files = len(pdf_files)
         pdf_status = st.empty()
         total_success = 0
         total_failed = 0
         total_skipped = 0
-        
+
         with st.status(
-            f"Processing PDFs to {'Markdown and JSON' if export_to_markdown else 'JSON'} files...", expanded=True
+            f"Processing PDFs to {'Markdown and JSON' if export_to_markdown else 'JSON'} files...",
+            expanded=True,
         ) as status:
             for idx, pdf_filename in enumerate(pdf_files, 1):
                 if st.session_state.cancel_processing:
                     status.warning("Processing canceled by user.")
                     break
 
-                page_slot_status = st.empty()
+                page_processing_slot_status = st.empty()
+                page_success = st.empty()
                 pdf_status.info(f"Processing: {pdf_filename.split('.')[0]}")
 
-                for log in process_pdf(
-                    os.path.join(TEMP_DIR_PDF, pdf_filename),
-                    create_markdown=export_to_markdown,
-                    overwrite=False,
-                    separate_result_dir=separate_result_dir,
-                    number_thread=number_thread,
-                ):
-                    if log.get("status") == "info":
-                        msg = log.get("message", "SKIP")
-                        if "[SKIP]" in msg:
-                            total_success += 1
-                            total_skipped += 1
-                        page_slot_status.info(log.get("message", "Processing skipped."))
-                    elif log.get("status") == "success":
-                        total_success += 1
-                        pdf_status.success(log.get("message", "Processing succeeded."))
-                    elif log.get("status") == "error":
-                        total_failed += 1
-                        st.write(log.get("message", "Processing failed."))
-                    elif log.get("status") == "ocr_active":
-                        page_slot_status.info(log.get("message", "OCR is active."))
-                    else:
-                        st.write(log.get("message", "Processing failed."))
+                if method_option_select == "Docling":
+                    output_dir = OUTPUT_DIR / "docling_results"
 
-                status.update(
-                    label=f"Processing: {idx}/{total_files} PDFs | Success {total_success} | Skipped {total_skipped} | Failed {total_failed}"
-                )
-                st.session_state.process_pdf_clicked = False
-                page_slot_status.empty()
+                    output_dir.mkdir(parents=True, exist_ok=True)
+
+                    for log in process_pdf(
+                        os.path.join(TEMP_DIR_PDF, pdf_filename),
+                        create_markdown=export_to_markdown,
+                        overwrite=overwrite,
+                        separate_result_dir=separate_result_dir,
+                        number_thread=number_thread,
+                        output_dir=output_dir,
+                    ):
+                        if log.get("status") == "info":
+                            msg = log.get("message", "SKIP")
+                            if "[SKIP]" in msg:
+                                total_success += 1
+                                total_skipped += 1
+                            page_processing_slot_status.info(
+                                log.get("message", "Processing skipped.")
+                            )
+                        elif log.get("status") == "success":
+                            total_success += 1
+                            pdf_status.success(
+                                log.get("message", "Processing succeeded.")
+                            )
+                        elif log.get("status") == "error":
+                            total_failed += 1
+                            st.write(log.get("message", "Processing failed."))
+                        elif log.get("status") == "ocr_active":
+                            page_processing_slot_status.info(
+                                log.get("message", "OCR is active.")
+                            )
+                        else:
+                            st.write(log.get("message", "Processing failed."))
+
+                if method_option_select == "PyMuPDF + Tesseract":
+                    FOLDER_OUTPUT_PYMU_TESSERACT.mkdir(parents=True, exist_ok=True)
+                    for log in process_pdf_pymu_tesseract(
+                        os.path.join(TEMP_DIR_PDF, pdf_filename),
+                        folder_output_path=FOLDER_OUTPUT_PYMU_TESSERACT,
+                        overwrite=overwrite,
+                    ):
+                        if log.get("status") == "info":
+                            msg = log.get("message", "SKIP")
+                            if "[SKIP]" in msg:
+                                total_success += 1
+                                total_skipped += 1
+                            page_processing_slot_status.info(
+                                log.get("message", "Processing skipped.")
+                            )
+                        elif log.get("status") == "success":
+                            total_success += 1
+                            pdf_status.success(
+                                log.get("message", "Processing succeeded.")
+                            )
+                        elif log.get("status") == "error":
+                            total_failed += 1
+                            st.write(log.get("message", "Processing failed."))
+                        elif log.get("status") == "ocr_active":
+                            page_processing_slot_status.info(
+                                log.get("message", "OCR is active.")
+                            )
+                        else:
+                            st.write(log.get("message", "Processing failed."))
+
+            status.update(
+                label=f"Processing: {idx}/{total_files} PDFs | Success {total_success} | Skipped {total_skipped} | Failed {total_failed}"
+            )
+
+            st.session_state.process_pdf_clicked = False
+            page_processing_slot_status.empty()
 
             pdf_status.empty()
 
@@ -400,21 +534,22 @@ def handle_pdf_processing(export_to_markdown, separate_result_dir, number_thread
                 status.success(
                     f"PDFs converted to {'Markdown and JSON' if export_to_markdown else 'JSON'} files. Total Success: {total_success}, Skipped {total_skipped}, Failed: {total_failed}"
                 )
-    
+
     return pdf_files
+
 
 def render_pdf_preview(pdf_files, export_to_markdown):
     if not pdf_files or len(pdf_files) == 0:
         st.info("No PDFs available for preview.")
         return
-    
+
     query_pdf = st.selectbox(
         "Select PDF to preview",
         options=pdf_files,
         index=0,
         key="pdf_select",
     )
-    
+
     if query_pdf == "Select PDF File":
         st.warning("Please select a valid PDF file.")
         return
@@ -443,8 +578,13 @@ def render_pdf_preview(pdf_files, export_to_markdown):
 
     with pdf:
         st.write("Selected PDF:")
-        pdf_viewer(pdf_path, width=900, height=700, pages_to_render=[page_number], 
-                  key=f"pdf_viewer_{query_pdf.split('.')[0]}_{page_number}")
+        pdf_viewer(
+            pdf_path,
+            width=900,
+            height=700,
+            pages_to_render=[page_number],
+            key=f"pdf_viewer_{query_pdf.split('.')[0]}_{page_number}",
+        )
 
     with result:
         st.write("Markdown Result:")
@@ -461,10 +601,17 @@ def render_pdf_preview(pdf_files, export_to_markdown):
 
         pdf_id = query_pdf.split(".")[0]
 
-        if export_to_markdown:
-            result_path = os.path.join(OUTPUT_DIR, pdf_id, pdf_id + ".json")
+        if st.session_state.method_option == "Docling":
+            base_path = os.path.join(OUTPUT_DIR, "docling_results")
+        elif st.session_state.method_option == "PyMuPDF + Tesseract":
+            base_path = FOLDER_OUTPUT_PYMU_TESSERACT
         else:
-            result_path = os.path.join(OUTPUT_DIR, pdf_id + ".json")
+            base_path = OUTPUT_DIR
+
+        if export_to_markdown and st.session_state.method_option == "Docling":
+            result_path = os.path.join(base_path, pdf_id, pdf_id + ".json")
+        else:
+            result_path = os.path.join(base_path, pdf_id + ".json")
 
         if os.path.exists(result_path):
             with open(result_path, "r", encoding="utf-8") as f:
@@ -492,18 +639,30 @@ def render_pdf_preview(pdf_files, export_to_markdown):
         else:
             st.info("No result JSON found for this PDF.")
 
+
 def main():
     # Initialize
     init_session_state()
     setup_page()
-    
+
     # Sidebar and settings
-    file_path, df, id_col, url_col, download_button, clear_temp_button, export_to_markdown, number_thread, separate_result_dir = render_sidebar()
-    
+    (
+        file_path,
+        df,
+        id_col,
+        url_col,
+        download_button,
+        clear_temp_button,
+        export_to_markdown,
+        number_thread,
+        separate_result_dir,
+        overwrite,
+    ) = render_sidebar()
+
     # Handle export confirmation dialog
     if st.session_state.get("show_confirm_dialog", False):
         confirmation_delete()
-    
+
     if st.session_state.get("cancelled_export"):
         st.toast("Export cancelled!", icon="❌")
         st.session_state.cancelled_export = False
@@ -511,11 +670,11 @@ def main():
     if st.session_state.get("already_exported"):
         st.toast("Export completed!", icon="✅")
         st.session_state.already_exported = False
-    
+
     # Handle downloads
     if download_button:
         handle_download_pdfs(file_path, df, id_col, url_col)
-    
+
     # Handle temp clearing
     if clear_temp_button:
         clear_temp_dir(TEMP_DIR)
@@ -523,12 +682,15 @@ def main():
             os.remove("exported_results.zip")
         st.sidebar.success("Temporary files cleared.")
         st.rerun()
-    
+
     # PDF processing
-    pdf_files = handle_pdf_processing(export_to_markdown, separate_result_dir, number_thread)
-    
+    pdf_files = handle_pdf_processing(
+        export_to_markdown, separate_result_dir, number_thread, overwrite
+    )
+
     # PDF Preview
     if pdf_files:
         render_pdf_preview(pdf_files, export_to_markdown)
+
 
 main()
