@@ -10,6 +10,7 @@ import re
 from pathlib import Path
 from glob import glob
 import uuid
+import pyperclip
 
 from pdf_process import (
     handle_pdf_download_from_dataset,
@@ -67,6 +68,10 @@ def init_session_state():
         st.session_state["file_uploader_key"] = str(uuid.uuid4())
     if "temp_file_path" not in st.session_state:
         st.session_state["temp_file_path"] = None
+    if "already_copied" not in st.session_state:
+        st.session_state["already_copied"] = False
+    if "selected_pdf" not in st.session_state:
+        st.session_state["selected_pdf"] = None
 
 
 # Configure page
@@ -214,26 +219,41 @@ def render_sidebar():
         st.session_state["file_uploader_key"] = str(uuid.uuid4())
         st.rerun()
 
-    # Check if there are existing CSV/Excel files in DATA_TEMP
+    # Combined sidebar for existing dataset and PDF files
     existing_files = list(DATA_TEMP.glob("*.csv")) + list(DATA_TEMP.glob("*.xlsx"))
-    if existing_files:
-        st.sidebar.info("Existing dataset files found in")
-        selected_file = st.sidebar.selectbox(
-        "Select a file to preview",
-        options=[file.name for file in existing_files],
-        help="Select a file from the existing dataset files in DATA_TEMP.",
-        )
-        if selected_file:
-            selected_file_path = DATA_TEMP / selected_file
-            df = read_dataset(selected_file_path)
-            column_list = df.columns.tolist()
-            st.session_state["temp_file_path"] = selected_file_path
+    existing_pdfs = list(TEMP_DIR_PDF.glob("*.pdf"))
 
+    if existing_files or existing_pdfs:
+        if existing_files:
+            st.sidebar.info("Existing dataset files found in temp directory")
+            selected_file = st.sidebar.selectbox(
+                "Select a dataset file to preview",
+                options=[file.name for file in existing_files],
+                help="Select a file from the existing dataset files in DATA_TEMP.",
+                key="existing_dataset_file",
+            )
+            if selected_file:
+                selected_file_path = DATA_TEMP / selected_file
+                df = read_dataset(selected_file_path)
+                column_list = df.columns.tolist()
+                st.session_state["temp_file_path"] = selected_file_path
+        else:
+            st.sidebar.warning(
+                "No dataset file uploaded or found. Please upload a CSV or Excel file."
+            )
+            df = None
+            column_list = []
+
+        if existing_pdfs:
+            st.sidebar.info("Existing PDF files found in temp directory")
+        else:
+            st.sidebar.warning(
+                "No PDF files uploaded or found. Please upload or download PDFs first."
+            )
     else:
         st.sidebar.warning(
-        "No dataset file uploaded or found. Please upload a CSV or Excel file."
+            "No dataset or PDF files found. Please upload a CSV/Excel dataset and/or PDF files."
         )
-        temp_file_path = None
         df = None
         column_list = []
 
@@ -432,8 +452,8 @@ def handle_pdf_processing(
         )
         return None
 
-    process_btn, method_options = st.columns(
-        2, gap="small", vertical_alignment="bottom"
+    process_all_pdf, process_single_pdf, exclude_object, method_options = st.columns(
+        4, gap="small", vertical_alignment="bottom"
     )
 
     method_option_select = method_options.selectbox(
@@ -449,11 +469,24 @@ def handle_pdf_processing(
         else FOLDER_OUTPUT_PYMU_TESSERACT
     )
 
-    process_pdf_btn = process_btn.button(
+    process_pdf_btn = process_all_pdf.button(
         "Process PDF",
         key="process_pdf",
         disabled=False if pdf_files else True,
         on_click=process_pdf_click,
+    )
+
+    extract_current_pdf = process_single_pdf.toggle(
+        "Process Selected PDF",
+        key="process_current_pdf",
+        disabled=False if pdf_files else True,
+        help="Process the currently selected PDF file.",
+    )
+
+    exclude_object_value = exclude_object.toggle(
+        "Exclude Object Detection",
+        value=True,
+        help="Exclude object detection during processing.",
     )
 
     if process_pdf_btn:
@@ -476,6 +509,10 @@ def handle_pdf_processing(
         total_failed = 0
         total_skipped = 0
 
+        if extract_current_pdf:
+            pdf_files = [st.session_state["selected_pdf"]]
+            total_files = 1
+
         with st.status(
             f"Processing PDFs to {'Markdown and JSON' if export_to_markdown else 'JSON'} files...",
             expanded=True,
@@ -485,7 +522,7 @@ def handle_pdf_processing(
                     status.warning("Processing canceled by user.")
                     break
 
-                pdf_status.info(f"Processing: {pdf_filename.split('.')[0]}")
+                pdf_status.info(f"Processing: {pdf_filename}")
                 page_processing_slot_status = st.empty()
 
                 if method_option_select == "Docling":
@@ -496,6 +533,7 @@ def handle_pdf_processing(
                         create_markdown=export_to_markdown,
                         overwrite=overwrite,
                         separate_result_dir=separate_result_dir,
+                        exclude_object=exclude_object_value,
                         number_thread=number_thread,
                         output_dir=output_dir,
                     ):
@@ -571,7 +609,7 @@ def handle_pdf_processing(
                 status.success(
                     f"PDFs converted to {'Markdown and JSON' if export_to_markdown else 'JSON'} files. Total Success: {total_success}, Skipped {total_skipped}, Failed: {total_failed}"
                 )
-            st.rerun()
+                st.rerun()
 
     return pdf_files
 
@@ -580,15 +618,28 @@ def render_pdf_preview(pdf_files, export_to_markdown):
     if not pdf_files or len(pdf_files) == 0:
         st.info("No PDFs available for preview.")
         return
+    
+    def update_selected_file(pdf_file):
+        if pdf_file:
+            st.session_state["selected_pdf"] = pdf_file
 
     query_pdf = st.selectbox(
         "Select PDF to preview",
         options=pdf_files,
-        index=0,
-        key="pdf_select",
+        index=pdf_files.index(st.session_state["selected_pdf"]) if st.session_state["selected_pdf"] in pdf_files else 0,
         placeholder="Select a PDF file",
+        help="Select a PDF file to preview.",
+        on_change=update_selected_file,
+        args=(st.session_state["selected_pdf"],),
     )
 
+    # Store the selected PDF in session state
+    st.session_state["selected_pdf"] = query_pdf
+
+    if not query_pdf:
+        st.info("Please select a PDF file to preview.")
+        return
+    
     pdf_path = os.path.join(TEMP_DIR_PDF, query_pdf)
     doc = pymupdf.open(pdf_path)
 
@@ -624,16 +675,6 @@ def render_pdf_preview(pdf_files, export_to_markdown):
     with result:
         st.write("Markdown Result:")
 
-        @st.dialog("Markdown Result")
-        def raw_markdown(raw_markdown):
-            st.code(raw_markdown, language="markdown")
-            if st.button("Close"):
-                st.session_state["show_raw_markdown"] = False
-                st.session_state["raw_markdown_content"] = None
-                st.session_state["raw_markdown_pdf_id"] = None
-                st.session_state["raw_markdown_page_number"] = None
-                st.rerun()
-
         pdf_id = query_pdf.split(".")[0]
 
         if st.session_state["method_option"] == "Docling":
@@ -651,24 +692,36 @@ def render_pdf_preview(pdf_files, export_to_markdown):
         if os.path.exists(result_path):
             with open(result_path, "r", encoding="utf-8") as f:
                 json_result = json.load(f)
+                total_duration = json_result.get("total_time", 0)
                 content = json_result.get("content", [])
+                json_for_copy = [
+                    {"page": p["page"], "content": p["content"]} for p in content
+                ]
 
                 if 0 <= page_number - 1 < len(content):
                     selected_page = content[page_number - 1]["content"]
+                    dur_per_page = content[page_number - 1].get("duration", 0)
+
                     raw_md_button = st.button(
-                        "Show Raw Markdown",
+                        "Copy Raw Markdown",
                         key=f"raw_md_{pdf_id}_{page_number}",
                         help="Click to view raw markdown content.",
                     )
                     if raw_md_button:
-                        st.session_state["show_raw_markdown"] = True
-                        st.session_state["raw_markdown_content"] = selected_page
-                        st.session_state["raw_markdown_pdf_id"] = pdf_id
-                        st.session_state["raw_markdown_page_number"] = page_number
-                        raw_markdown(selected_page)
+                        pyperclip.copy(selected_page)
+                        st.session_state["already_copied"] = True
+                        st.rerun()
 
+                    with st.expander("Processing Time Details", expanded=False):
+                        st.info(
+                            f"Total processing time for this page: {time.strftime('%H:%M:%S', time.gmtime(dur_per_page))}"
+                        )
+                        st.info(
+                            f"Total processing time for the entire document: {time.strftime('%H:%M:%S', time.gmtime(total_duration))}"
+                        )
                     with st.container(key="markdown_result", height=600):
-                        st.markdown(selected_page, unsafe_allow_html=True)
+                        st.write(selected_page, unsafe_allow_html=True)
+
                 else:
                     st.info("No markdown content for this page.")
         else:
@@ -704,6 +757,10 @@ def main():
     if st.session_state.get("already_exported"):
         st.toast("Export completed!", icon="✅")
         st.session_state["already_exported"] = False
+    
+    if st.session_state.get("already_copied"):
+        st.toast("Markdown copied to clipboard!", icon="✅")
+        st.session_state["already_copied"] = False
 
     # Handle downloads
     if download_button:
