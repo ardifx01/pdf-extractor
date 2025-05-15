@@ -640,7 +640,9 @@ def render_pdf_preview(pdf_files, export_to_markdown):
         st.info("Please select a PDF file to preview.")
         return
     
-    pdf_path = os.path.join(TEMP_DIR_PDF, query_pdf)
+    query_pdf = Path(query_pdf)
+    
+    pdf_path = TEMP_DIR_PDF / query_pdf
     doc = pymupdf.open(pdf_path)
 
     if doc is None:
@@ -669,13 +671,13 @@ def render_pdf_preview(pdf_files, export_to_markdown):
             width=900,
             height=700,
             pages_to_render=[page_number],
-            key=f"pdf_viewer_{query_pdf.split('.')[0]}_{page_number}",
+            key=f"pdf_viewer_{query_pdf.stem}_{page_number}",
         )
 
     with result:
         st.write("Markdown Result:")
 
-        pdf_id = query_pdf.split(".")[0]
+        pdf_id = query_pdf.stem
 
         if st.session_state["method_option"] == "Docling":
             base_path = os.path.join(OUTPUT_DIR, "docling_results")
@@ -697,6 +699,7 @@ def render_pdf_preview(pdf_files, export_to_markdown):
                 json_for_copy = [
                     {"page": p["page"], "content": p["content"]} for p in content
                 ]
+                st.json(json_result, expanded=False)
 
                 if 0 <= page_number - 1 < len(content):
                     selected_page = content[page_number - 1]["content"]
