@@ -178,3 +178,5 @@ pyrightconfig.json
 app/results
 app/temp
 *.zip
+*.ipynb
+*models*
