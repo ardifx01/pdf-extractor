@@ -2,21 +2,26 @@ from pathlib import Path
 import gc
 import shutil
 import json
+import time
 import os
 import pymupdf
 from pymupdf import Page
 from ultralytics import YOLO
+
+from docling_core.types.doc import PictureItem
+
 from docling.datamodel.base_models import InputFormat
 from docling.datamodel.pipeline_options import (
     AcceleratorDevice,
     AcceleratorOptions,
     PdfPipelineOptions,
     EasyOcrOptions,
-    RapidOcrOptions,
+    TesseractCliOcrOptions,
 )
+
 from docling.datamodel.settings import settings
 from docling.document_converter import DocumentConverter, PdfFormatOption
-from huggingface_hub import snapshot_download
+from docling.utils.model_downloader import download_models
 
 from helper import logging_process, check_json_file_exists
 
@@ -25,6 +30,7 @@ OUTPUT_DIR = Path("app/results")
 MODEL_PATH_YOLO = Path("./app/yolo/best-1.pt")
 PDF_PATH = Path("app/pdf")
 TEMP_IMAGE_DIR = Path("app/temp/image")
+ARTIFACT_PATH = Path("app/models")
 
 # --- Setup ---
 model = YOLO(MODEL_PATH_YOLO)
@@ -66,14 +72,21 @@ def extract_text_from_pdf_page(
         - doc_conversion_secs (float): Time taken for document conversion.
     """
 
+    # Check if the models are already downloaded
+    if not os.path.exists(ARTIFACT_PATH):
+        download_models(output_dir=ARTIFACT_PATH)
+
     accelerator_options = AcceleratorOptions(
         num_threads=number_thread, device=AcceleratorDevice.AUTO
     )
     pipeline_options = PdfPipelineOptions()
+    pipeline_options.artifacts_path = ARTIFACT_PATH
     pipeline_options.accelerator_options = accelerator_options
     pipeline_options.do_ocr = True
     pipeline_options.do_table_structure = True
+    pipeline_options.images_scale = 2.0
     pipeline_options.table_structure_options.do_cell_matching = True
+    pipeline_options.generate_picture_images = True
     settings.debug.profile_pipeline_timings = True
 
     # pipeline_options.ocr_options = TesseractCliOcrOptions(
@@ -91,7 +104,6 @@ def extract_text_from_pdf_page(
         allowed_formats=[InputFormat.PDF, InputFormat.IMAGE],
         format_options={
             InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options),
-            InputFormat.IMAGE: PdfFormatOption(pipeline_options=pipeline_options),
         },
     )
     conv_result = converter.convert(src_path)
@@ -101,6 +113,11 @@ def extract_text_from_pdf_page(
     if len(text) == 0 and force_full_page_ocr is False:
         # If the text is empty, it might be a scanned PDF, so we run OCR again with force_full_page_ocr=True
         return None, doc_conversion_secs
+
+    for item, _level in conv_result.document.iterate_items():
+        if isinstance(item, PictureItem) and force_full_page_ocr is False:
+            print("[INFO] Image found, running OCR again.")
+            return None, doc_conversion_secs
 
     if create_markdown:
         md_filename = f"{result_path}.md"
@@ -115,6 +132,7 @@ def process_pdf(
     create_markdown=False,
     separate_result_dir=False,
     overwrite=True,
+    exclude_object=True,
     number_thread: int = 4,
     output_dir: str | Path = None,
 ):
@@ -150,24 +168,28 @@ def process_pdf(
                 page_image = page.get_pixmap(matrix=mat)
                 image_path = temp_image_dir / f"{base_name}-page-{page_index}.png"
                 page_image.save(str(image_path))
+                
+                if exclude_object:
+                    # YOLO inference
+                    results = model.predict(str(image_path), verbose=False, conf=0.5)
 
-                # YOLO inference
-                results = model.predict(str(image_path), verbose=False, conf=0.5)
+                    result_dict = {
+                        "cls": results[0].boxes.cls.cpu().numpy(),
+                        "box": results[0].boxes.xyxy.cpu().numpy(),
+                    }
 
-                result_dict = {
-                    "cls": results[0].boxes.cls.cpu().numpy(),
-                    "box": results[0].boxes.xyxy.cpu().numpy(),
-                }
+                    # Filter boxes based on class values
+                    boxes = []
+                    for i, cls_value in enumerate(result_dict["cls"]):
+                        if cls_value == 0:
+                            boxes.append(result_dict["box"][i])
 
-                # Filter boxes based on class values
-                boxes = []
-                for i, cls_value in enumerate(result_dict["cls"]):
-                    if cls_value == 0:
-                        boxes.append(result_dict["box"][i])
-
-                rectangles = yolo_to_pdf_rectangles(boxes, zoom) if boxes else []
-                if rectangles:
-                    page = draw_bounding_boxes(page, rectangles)
+                    rectangles = yolo_to_pdf_rectangles(boxes, zoom) if boxes else []
+                    if rectangles:
+                        page = draw_bounding_boxes(page, rectangles)
+                    
+                    del results, result_dict, boxes, rectangles
+                    gc.collect()
 
                 page_pdf_path = result_dir / f"{base_name}-page-{page_index}.pdf"
                 with pymupdf.open() as temp_pdf:
@@ -214,16 +236,12 @@ def process_pdf(
 
                 yield logging_process(
                     "info",
-                    f"Processed page {page_index}/{pdf.page_count} of {base_name} in {time_spent} seconds."
+                    f"Processed page {page_index}/{pdf.page_count} of {base_name} in {time.strftime('%H:%M:%S', time.gmtime(time_spent))}"
                 )
 
                 del (
                     mat,
                     page_image,
-                    results,
-                    boxes,
-                    rectangles,
-                    result_dict,
                     page_pdf_path,
                     markdown_text,
                     time_spent,
