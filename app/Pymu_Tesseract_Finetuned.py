@@ -78,6 +78,36 @@ def extract_text_from_image(image):
 
 
 def extract_pdf_single_page(doc, base_name, model_yolo, page_number):
+    """
+    Extract text and tables from a single PDF page using a combination of YOLO object detection and OCR.
+    This function processes a PDF page by:
+    1. Converting the page to an image
+    2. Using YOLO to detect and mask non-text elements
+    3. Applying redactions to exclude non-text objects from the PDF
+    4. Identifying text regions and tables
+    5. Extracting content from each region in order (top to bottom)
+    Parameters
+    ----------
+    doc : fitz.Document
+        The PyMuPDF document object containing the PDF
+    base_name : str
+        Base name of the PDF file (used for logging)
+    model_yolo : object
+        Loaded YOLO model for text/non-text detection
+    page_number : int
+        The page number to process (0-indexed)
+    Returns
+    -------
+    tuple
+        A tuple containing:
+        - combined_content (str): The extracted text and table content
+        - confidence (float): The OCR confidence score (average if multiple text regions)
+    Notes
+    -----
+    The function sorts detected elements by their vertical position (y-coordinate)
+    and processes them sequentially. Tables are extracted using PyMuPDF's table detection,
+    while text is extracted using OCR after appropriate masking.
+    """
 
     page = doc.load_page(page_number)
     

@@ -37,6 +37,16 @@ model = YOLO(MODEL_PATH_YOLO)
 
 # --- PDF Utilities ---
 def yolo_to_pdf_rectangles(boxes, zoom):
+    """
+    Converts YOLO-format bounding boxes to PyMuPDF rectangle objects, scaling coordinates by the given zoom factor.
+
+    Args:
+        boxes (list of list or tuple): A list of bounding boxes, where each box is represented as [x0, y0, x1, y1].
+        zoom (float): The zoom factor to scale down the bounding box coordinates.
+
+    Returns:
+        List of PyMuPDF Rect objects
+    """
     return [
         pymupdf.Rect(
             box[0] // zoom,  # x0
@@ -49,6 +59,16 @@ def yolo_to_pdf_rectangles(boxes, zoom):
 
 
 def draw_bounding_boxes(page: Page, rectangles: list[pymupdf.Rect]):
+    """
+    Draws white bounding boxes on the given PDF page by adding redaction annotations to the specified rectangles and applying the redactions.
+
+    Args:
+        page (Page): The PDF page object to draw bounding boxes on.
+        rectangles (list[pymupdf.Rect]): A list of rectangle objects specifying the areas to be covered with bounding boxes.
+
+    Returns:
+        Page: The modified PDF page with the bounding boxes applied.
+    """
     for rect in rectangles:
         page.add_redact_annot(rect, fill=(1, 1, 1))
     page.apply_redactions()
