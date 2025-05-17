@@ -11,6 +11,8 @@ from pathlib import Path
 from glob import glob
 import uuid
 import pyperclip
+from datetime import datetime, timedelta
+import atexit
 
 from pdf_process import (
     handle_pdf_download_from_dataset,
@@ -40,9 +42,10 @@ EXTENSION = {
 # Fix torch path handling
 torch.classes.__path__ = []
 
+
+
 DATA_TEMP = Path("app/temp/data")
 os.makedirs(DATA_TEMP, exist_ok=True)
-
 
 # Initialize session state variables
 def init_session_state():
@@ -72,6 +75,8 @@ def init_session_state():
         st.session_state["already_copied"] = False
     if "selected_pdf" not in st.session_state:
         st.session_state["selected_pdf"] = None
+    if "uploaded_files_meta" not in st.session_state:
+        st.session_state["uploaded_files_meta"] = {}
 
 
 # Configure page
@@ -175,11 +180,6 @@ def render_sidebar():
     )
 
     export_to_markdown = st.sidebar.checkbox("Export to Markdown", value=False)
-    separate_result_dir = st.sidebar.checkbox(
-        "Create separate result directory",
-        value=export_to_markdown,
-        help="Create a separate folder for each PDF file. True if exporting to Markdown.",
-    )
     overwrite = st.sidebar.toggle(
         "Overwrite existing files",
         value=False,
@@ -209,6 +209,10 @@ def render_sidebar():
 
                 df = read_dataset(temp_file_path)
                 column_list = df.columns.tolist()
+
+                st.session_state["uploaded_files_meta"][str(dataset_file.name)] = {
+                    "extracted_at": datetime.now().isoformat(),
+                }
 
             elif dataset_file.name.endswith(".pdf"):
                 # Save directly to TEMP_DIR_PDF
@@ -320,7 +324,6 @@ def render_sidebar():
         clear_temp_button,
         export_to_markdown,
         number_thread,
-        separate_result_dir,
         overwrite,
     )
 
@@ -441,7 +444,7 @@ def handle_download_pdfs(file_path, df, id_col, url_col):
 
 
 def handle_pdf_processing(
-    export_to_markdown, separate_result_dir, number_thread, overwrite
+    export_to_markdown, number_thread, overwrite
 ):
     ensure_temp_dir(TEMP_DIR_PDF)
     pdf_files = os.listdir(TEMP_DIR_PDF)
@@ -459,9 +462,14 @@ def handle_pdf_processing(
     method_option_select = method_options.selectbox(
         "Select Processing Method",
         options=["Docling", "PyMuPDF + Tesseract"],
-        index=0,
+        index=None,
         key="method_option",
     )
+
+    if not method_option_select:
+        st.warning(
+            "Please select a processing method to proceed."
+        )
 
     ensure_temp_dir(
         OUTPUT_DIR / "docling_results"
@@ -480,13 +488,13 @@ def handle_pdf_processing(
         "Process Selected PDF",
         key="process_current_pdf",
         disabled=False if pdf_files else True,
-        help="Process the currently selected PDF file.",
+        help="Process only the currently selected PDF file.",
     )
 
     exclude_object_value = exclude_object.toggle(
-        "Exclude Object Detection",
+        "Object Detection",
         value=True,
-        help="Exclude object detection during processing.",
+        help="Use object detection during processing.",
     )
 
     if process_pdf_btn:
@@ -532,7 +540,6 @@ def handle_pdf_processing(
                         os.path.join(TEMP_DIR_PDF, pdf_filename),
                         create_markdown=export_to_markdown,
                         overwrite=overwrite,
-                        separate_result_dir=separate_result_dir,
                         exclude_object=exclude_object_value,
                         number_thread=number_thread,
                         output_dir=output_dir,
@@ -596,12 +603,17 @@ def handle_pdf_processing(
                         else:
                             st.write(log.get("message", "Processing failed."))
 
+
                     status.update(
                         label=f"Processing: {idx}/{total_files} PDFs | Success {total_success} | Skipped {total_skipped} | Failed {total_failed}"
                     )
 
                     st.session_state["process_pdf_clicked"] = False
                     page_processing_slot_status.empty()
+
+                st.session_state["uploaded_files_meta"][str(pdf_filename)] = {
+                    "extracted_at": datetime.now().isoformat(),
+                }
 
             pdf_status.empty()
 
@@ -612,6 +624,56 @@ def handle_pdf_processing(
                 st.rerun()
 
     return pdf_files
+
+def clean_old_files(max_age_minutes=30):
+    """Clean up old files and provide warnings before deletion."""
+    now = datetime.now()
+    expired_files = []
+    
+    for file_path_str, meta in st.session_state["uploaded_files_meta"].items():
+        file_path = Path(file_path_str)
+        if "extracted_at" not in meta:
+            continue
+            
+        uploaded_time = datetime.fromisoformat(meta["extracted_at"])
+        age = now - uploaded_time
+        remaining = timedelta(minutes=max_age_minutes) - age
+        remaining_minutes = int(remaining.total_seconds() // 60)
+        
+        # Add warning flags if they don't exist
+        if "warned_at_10" not in meta:
+            meta["warned_at_10"] = False
+        if "warned_at_5" not in meta:
+            meta["warned_at_5"] = False
+            
+        # Show warnings at specific thresholds
+        if remaining_minutes <= 10 and not meta["warned_at_10"]:
+            st.toast(f"⚠️ {file_path.name} will be deleted in 10 minutes!", icon="⏳")
+            meta["warned_at_10"] = True
+            
+        elif remaining_minutes <= 5 and not meta["warned_at_5"]:
+            st.toast(f"🚨 {file_path.name} only 5 minutes until deletion!", icon="⏳")
+            meta["warned_at_5"] = True
+            
+        # Delete expired files
+        if age > timedelta(minutes=max_age_minutes):
+            try:
+                if os.path.exists(os.path.join(TEMP_DIR_PDF, file_path)):
+                    os.remove(os.path.join(TEMP_DIR_PDF, file_path))
+                    st.toast(f"🧹 {file_path.name} has been automatically deleted", icon="✅")
+                    expired_files.append(file_path_str)
+
+                if os.path.exists(os.path.join(DATA_TEMP, file_path)):
+                    os.remove(os.path.join(DATA_TEMP, file_path))
+                    st.toast(f"🧹 {file_path.name} has been automatically deleted", icon="✅")
+                    expired_files.append(file_path_str)
+            except Exception as e:
+                st.warning(f"Failed to delete {file_path}: {e}")
+                
+    # Remove deleted files from tracking
+    for expired in expired_files:
+        if expired in st.session_state["uploaded_files_meta"]:
+            del st.session_state["uploaded_files_meta"][expired]
 
 
 def render_pdf_preview(pdf_files, export_to_markdown):
@@ -745,7 +807,6 @@ def main():
         clear_temp_button,
         export_to_markdown,
         number_thread,
-        separate_result_dir,
         overwrite,
     ) = render_sidebar()
 
@@ -779,11 +840,14 @@ def main():
             os.remove("exported_results.zip")
         st.sidebar.success("Temporary files cleared.")
         st.rerun()
+    # Clean old files
+    clean_old_files(max_age_minutes=3)
 
     # PDF processing
     pdf_files = handle_pdf_processing(
-        export_to_markdown, separate_result_dir, number_thread, overwrite
+        export_to_markdown, number_thread, overwrite
     )
+
 
     # PDF Preview
     if pdf_files:
@@ -791,3 +855,9 @@ def main():
 
 
 main()
+
+# Cleanup on exit
+atexit.register(clear_temp_dir, TEMP_DIR)
+atexit.register(clear_temp_dir, OUTPUT_DIR)
+atexit.register(clear_temp_dir, TEMP_DIR_PDF)
+atexit.register(clear_temp_dir, DATA_TEMP)
