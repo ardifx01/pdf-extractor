@@ -462,14 +462,9 @@ def handle_pdf_processing(
     method_option_select = method_options.selectbox(
         "Select Processing Method",
         options=["Docling", "PyMuPDF + Tesseract"],
-        index=None,
+        index=1,
         key="method_option",
     )
-
-    if not method_option_select:
-        st.warning(
-            "Please select a processing method to proceed."
-        )
 
     ensure_temp_dir(
         OUTPUT_DIR / "docling_results"

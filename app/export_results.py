@@ -7,8 +7,9 @@ import os
 import pymupdf
 from pymupdf import Page
 from ultralytics import YOLO
+import re
 
-from docling_core.types.doc import PictureItem
+from docling_core.types.doc import PictureItem, TextItem
 
 from docling.datamodel.base_models import InputFormat
 from docling.datamodel.pipeline_options import (
@@ -57,6 +58,25 @@ def yolo_to_pdf_rectangles(boxes, zoom):
         for box in boxes
     ]
 
+def extract_unique_texts(document):
+    seen = set()
+    texts = []
+
+    for item, _ in document.iterate_items():
+        if isinstance(item, TextItem):
+            if item.text not in seen:
+                texts.append(item.text)
+                seen.add(item.text)
+
+        elif isinstance(item, PictureItem):
+            for sub_item, _ in document.iterate_items(
+                root=item, traverse_pictures=True
+            ):
+                if isinstance(sub_item, TextItem) and sub_item.text not in seen:
+                    texts.append(sub_item.text)
+                    seen.add(sub_item.text)
+
+    return texts
 
 def draw_bounding_boxes(page: Page, rectangles: list[pymupdf.Rect]):
     """
@@ -128,16 +148,11 @@ def extract_text_from_pdf_page(
     )
     conv_result = converter.convert(src_path)
     doc_conversion_secs = round(conv_result.timings["pipeline_total"].times[0], 2)
-    text = conv_result.document.export_to_markdown()
+    text = conv_result.document.export_to_markdown(escape_underscores=False)
 
-    if len(text) == 0 and force_full_page_ocr is False:
+    if len(text.strip()) == 0 and force_full_page_ocr is False:
         # If the text is empty, it might be a scanned PDF, so we run OCR again with force_full_page_ocr=True
         return None, doc_conversion_secs
-
-    for item, _level in conv_result.document.iterate_items():
-        if isinstance(item, PictureItem) and force_full_page_ocr is False:
-            print("[INFO] Image found, running OCR again.")
-            return None, doc_conversion_secs
 
     if create_markdown:
         md_filename = f"{result_path}.md"
@@ -150,7 +165,6 @@ def process_pdf(
     pdf_file: str,
     idx: int = 1,
     create_markdown=False,
-    separate_result_dir=False,
     overwrite=True,
     exclude_object=True,
     number_thread: int = 4,
@@ -159,7 +173,7 @@ def process_pdf(
     base_name = Path(pdf_file).stem
     pdf_path = pdf_file
 
-    if separate_result_dir or create_markdown:
+    if create_markdown:
         result_dir = output_dir / base_name
         result_dir.mkdir(exist_ok=True)
         json_result_path = result_dir / f"{base_name}.json"
