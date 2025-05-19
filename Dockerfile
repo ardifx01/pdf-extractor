@@ -45,6 +45,8 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 COPY app /app/app
 COPY *.py /app/
 
+RUN mkdir -p /app/models
+
 # Expose the application port
 EXPOSE 8501
 
