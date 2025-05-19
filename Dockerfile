@@ -42,7 +42,7 @@ COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/pytho
 COPY --from=builder /usr/local/bin /usr/local/bin
 
 # Copy application files
-COPY app /app/app
+COPY app/ /app/
 COPY *.py /app/
 
 RUN mkdir -p /app/models
