@@ -1,0 +1,23 @@
+version: "3.9"
+
+volumes:
+  pdf-extractor-models:
+    name: pdf-extractor-models
+
+services:
+  pdf-extractor:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: dzuladj/pdf-extractor:dev
+    ports:
+      - "8501:8501"
+    volumes:
+      - pdf-extractor-models:/app/app/models
+    command:
+      - /bin/sh
+      - -c
+      - >
+        /entrypoint.sh streamlit run app/dashboard.py
+        --server.port=8501
+        --server.address=0.0.0.0

@@ -1,54 +1,62 @@
-# Stage 1: Builder
+# --- Builder Stage ---
 FROM python:3.12-slim-bookworm AS builder
 
-# Set up environment variables
-ENV PATH="/root/.local/bin:$PATH"
-
-# Install system dependencies
+# Install system dependencies - combined into one RUN to reduce layers
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
+    ca-certificates \
     gnupg \
+    libgl1-mesa-glx \
+    libglib2.0-0 \
     && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
-# Install UV (fast package manager)
+# Install uv (fast package manager)
 ADD https://astral.sh/uv/install.sh /uv-installer.sh
 RUN sh /uv-installer.sh && rm /uv-installer.sh
+ENV PATH="/root/.local/bin/:$PATH"
 
 # Set working directory
 WORKDIR /app
 
-# Copy requirements.txt and install Python dependencies
+# Copy only requirements file and install dependencies
 COPY requirements.txt .
-RUN uv pip install --no-cache-dir torch torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/cpu --system \
-    && uv pip install --no-cache-dir -r requirements.txt --system
+RUN --mount=type=cache,target=/root/.cache/pip uv pip install --no-cache-dir torch torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/cpu --system
+RUN --mount=type=cache,target=/root/.cache/pip uv pip install --no-cache-dir -r requirements.txt --system
 
-# Stage 2: Final Image
+# --- Final Stage ---
 FROM python:3.12-slim-bookworm
 
-# Install system dependencies dynamically from packages.txt
-COPY packages.txt /tmp/packages.txt
-RUN apt-get update && xargs -a /tmp/packages.txt apt-get install -y --no-install-recommends \
+# Install only runtime dependencies in a single layer
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgl1-mesa-glx \
+    libglib2.0-0 \
+    curl \
+    gnupg \
+    && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
     && apt-get clean \
-    && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/* /tmp/packages.txt
+    && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/* \
+    && npm cache clean --force
 
 # Set working directory
 WORKDIR /app
 
-# Copy Python dependencies from builder stage
+# Copy installed Python packages and app from builder
 COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
 COPY --from=builder /usr/local/bin /usr/local/bin
 
-# Copy application files
+# Copy only necessary application files
 COPY app /app/app
 COPY *.py /app/
 
-RUN mkdir -p /app/models
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 
-# Expose the application port
+# Expose Streamlit port
 EXPOSE 8501
 
-# Command to run the application
+# Start Streamlit app
 CMD ["streamlit", "run", "app/dashboard.py", "--server.port=8501", "--server.address=0.0.0.0"]

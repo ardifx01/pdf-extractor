@@ -138,6 +138,12 @@ cython_debug/
 # VS Code settings
 .vscode/
 
+app/results
+app/temp
+*.zip
+*.ipynb
+app/models/
+
 # System files
 .DS_Store
 Thumbs.db
