@@ -9,6 +9,8 @@ import re
 import pandas as pd
 import requests
 
+from urllib.parse import urlparse
+
 # Constants
 TEMP_DIR_PDF = Path("app/temp/pdf")
 TEMP_DIR = Path("app/temp/")
@@ -46,35 +48,47 @@ def ensure_temp_dir(dir_name: str | Path = TEMP_DIR):
     """Ensure the temporary directory exists."""
     os.makedirs(dir_name, exist_ok=True)
 
-def download_pdf(id: str, url: str):
+def download_pdf(id: str = None, url: str = None):
     """
     Download a PDF file from a URL and save it to TEMP_DIR.
     Retries up to 3 times if download fails.
 
     Args:
-        id (str): The ID of the PDF file.
+        id (str, optional): The ID of the PDF file.
         url (str): The URL to download the PDF from.
 
     Yields:
         str: Status message.
     """
     ensure_temp_dir(TEMP_DIR_PDF)
-    filename = os.path.join(TEMP_DIR_PDF, f"{id}.pdf")
+    filename = ""
     max_retries = 3
 
     for attempt in range(1, max_retries + 1):
         try:
+            if id:
+                filename = TEMP_DIR_PDF / f"{id}.pdf"
+            elif url:
+                filename = TEMP_DIR_PDF / f"{urlparse(url).path.split('/')[-1]}"
+            else:
+                yield {
+                    "status": "error",
+                    "id": id,
+                    "url": url,
+                    "message": "❌ No ID or URL provided.",
+                }
+                return
+
             if os.path.exists(filename):
                 if not is_pdf_valid_but_repaired(filename):
                     os.remove(filename)
                     continue  # Retry download
-
                 else:
                     yield {
                         "status": "info",
                         "id": id,
                         "url": url,
-                        "message": f"🟢 Using cached file for {id}.pdf",
+                        "message": f"🟢 Using cached file for {filename.name}",
                     }
                     return
 
@@ -89,7 +103,7 @@ def download_pdf(id: str, url: str):
                 "status": "success",
                 "id": id,
                 "url": url,
-                "message": f"✅ Downloaded {id}.pdf",
+                "message": f"✅ Downloaded {filename.name}",
             }
             return
         except requests.RequestException as e:
@@ -101,7 +115,7 @@ def download_pdf(id: str, url: str):
                     "status": "error",
                     "id": id,
                     "url": url,
-                    "message": f"❌ Failed to download {id}.pdf after {max_retries} attempts: {str(e)}",
+                    "message": f"❌ Failed to download {filename.name if filename else 'file' } after {max_retries} attempts: {str(e)}",
                 }
 
 def read_dataset(dataset_file: str | Path) -> pd.DataFrame:

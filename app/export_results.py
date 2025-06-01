@@ -7,6 +7,7 @@ import os
 import pymupdf
 from pymupdf import Page
 from ultralytics import YOLO
+import math
 import re
 
 from docling_core.types.doc import PictureItem, TextItem
@@ -26,15 +27,34 @@ from docling.utils.model_downloader import download_models
 
 from helper import logging_process, check_json_file_exists
 
+import warnings
+from glob import glob
+warnings.filterwarnings("ignore")
+
 # --- Constants ---
 OUTPUT_DIR = Path("app/results")
-MODEL_PATH_YOLO = Path("./app/yolo/best-1.pt")
 PDF_PATH = Path("app/pdf")
 TEMP_IMAGE_DIR = Path("app/temp/image")
 ARTIFACT_PATH = Path("app/models")
 
-# --- Setup ---
-model = YOLO(MODEL_PATH_YOLO)
+def get_latest_yolo_model_path(yolo_dir="app/yolo"):
+    """
+    Get the latest YOLO model file from the specified directory.
+    Args:
+        yolo_dir (str): Directory where YOLO model files are stored.
+    Returns:
+        Path: Path to the latest YOLO model file.
+    Raises:
+        FileNotFoundError: If no YOLO model files are found in the specified directory.
+    """
+    yolo_files = sorted(
+        glob(str(Path(yolo_dir) / "*.pt")),
+        key=lambda f: os.path.getmtime(f),
+        reverse=True,
+    )
+    if not yolo_files:
+        raise FileNotFoundError(f"YOLO model file not found at {yolo_dir}/")
+    return Path(yolo_files[0])
 
 # --- PDF Utilities ---
 def yolo_to_pdf_rectangles(boxes, zoom):
@@ -114,7 +134,7 @@ def extract_text_from_pdf_page(
 
     # Check if the models are already downloaded
     if not os.path.exists(ARTIFACT_PATH):
-        download_models(output_dir=ARTIFACT_PATH)
+        download_models(output_dir=ARTIFACT_PATH, progress=True)
 
     accelerator_options = AcceleratorOptions(
         num_threads=number_thread, device=AcceleratorDevice.AUTO
@@ -124,8 +144,10 @@ def extract_text_from_pdf_page(
     pipeline_options.accelerator_options = accelerator_options
     pipeline_options.do_ocr = True
     pipeline_options.do_table_structure = True
+    # pipeline_options.do_table_structure = False
     pipeline_options.images_scale = 2.0
     pipeline_options.table_structure_options.do_cell_matching = True
+    # pipeline_options.table_structure_options.do_cell_matching = False
     pipeline_options.generate_picture_images = True
     settings.debug.profile_pipeline_timings = True
 
@@ -149,17 +171,19 @@ def extract_text_from_pdf_page(
     conv_result = converter.convert(src_path)
     doc_conversion_secs = round(conv_result.timings["pipeline_total"].times[0], 2)
     text = conv_result.document.export_to_markdown(escape_underscores=False)
+    
+    confidence_data = conv_result.confidence.model_dump()
 
     if len(text.strip()) == 0 and force_full_page_ocr is False:
         # If the text is empty, it might be a scanned PDF, so we run OCR again with force_full_page_ocr=True
-        return None, doc_conversion_secs
+        return None, doc_conversion_secs, confidence_data
 
     if create_markdown:
         md_filename = f"{result_path}.md"
         with open(md_filename, "w+", encoding="utf-8") as md_file:
             md_file.write(text)
 
-    return text, doc_conversion_secs
+    return text, doc_conversion_secs, confidence_data
 
 def process_pdf(
     pdf_file: str,
@@ -170,6 +194,21 @@ def process_pdf(
     number_thread: int = 4,
     output_dir: str | Path = None,
 ):
+    """
+    Process a PDF file, extracting text and optionally creating markdown files.
+    Args:
+        pdf_file (str): Path to the PDF file to process.
+        idx (int): Index of the PDF file in the processing queue.
+        create_markdown (bool): Whether to create markdown files from the extracted text.
+        overwrite (bool): Whether to overwrite existing JSON results.
+        exclude_object (bool): Whether to exclude objects detected by YOLO.
+        number_thread (int): Number of threads to use for OCR.
+        output_dir (str | Path): Directory to save the output results.
+    Yields:
+        dict: Status messages indicating the progress of the processing.
+    """
+    MODEL_YOLO = get_latest_yolo_model_path()
+    model = YOLO(MODEL_YOLO)
     base_name = Path(pdf_file).stem
     pdf_path = pdf_file
 
@@ -237,7 +276,7 @@ def process_pdf(
                     temp_pdf.save(str(page_pdf_path), garbage=4, deflate=True)
 
                 # Checking if the PDF is scanned and needs OCR
-                markdown_text, time_spent = extract_text_from_pdf_page(
+                markdown_text, time_spent, confidence_data = extract_text_from_pdf_page(
                     page_pdf_path,
                     result_dir / f"{base_name}-page-{page_index}",
                     create_markdown,
@@ -250,7 +289,7 @@ def process_pdf(
                         f"Page {page_index}/{pdf.page_count} of {base_name} is empty, running OCR again."
                     )
                     # If the text is empty, it might be a scanned PDF, so we run OCR again with force_full_page_ocr=True
-                    markdown_text, time_spent = extract_text_from_pdf_page(
+                    markdown_text, time_spent, confidence_data = extract_text_from_pdf_page(
                         page_pdf_path,
                         result_dir / f"{base_name}-page-{page_index}",
                         create_markdown,
@@ -258,12 +297,21 @@ def process_pdf(
                         force_full_page_ocr=True,
                     )
 
+                temp_content = {
+                    "page": page_index,
+                    "content": markdown_text,
+                    "duration": time_spent,
+                }
+
+                confidence_data["pages"][0] = {
+                    k: (None if isinstance(v, float) and math.isnan(v) else v) for k, v in confidence_data["pages"][0].items()
+                }
+                
+
+                temp_content.update(confidence_data["pages"][0])
+
                 result_json["content"].append(
-                    {
-                        "page": page_index,
-                        "content": markdown_text,
-                        "duration": time_spent,
-                    }
+                    temp_content
                 )
 
                 total_times += time_spent
@@ -289,7 +337,7 @@ def process_pdf(
             result_json["total_time"] = round(total_times, 2)
 
             with open(json_result_path, "w+", encoding="utf-8") as json_file:
-                json.dump(result_json, json_file, ensure_ascii=False, indent=2)
+                json.dump(result_json, json_file, ensure_ascii=False, indent=2, allow_nan=False)
 
         # Remove temp PDF files
         for f in result_dir.glob("*.pdf"):

@@ -11,9 +11,9 @@ import gc
 import pandas as pd
 import time
 from pathlib import Path
+from glob import glob
 
 from export_results import (
-    MODEL_PATH_YOLO,
     OUTPUT_DIR,
 )
 
@@ -21,7 +21,24 @@ from helper import logging_process, check_json_file_exists
 
 FOLDER_OUTPUT_PYMU_TESSERACT = OUTPUT_DIR / "pymu_tesseract_finetuned"
 
-model = YOLO(MODEL_PATH_YOLO)
+def get_latest_yolo_model_path(yolo_dir="app/yolo"):
+    """
+    Get the latest YOLO model file from the specified directory.
+    Args:
+        yolo_dir (str): Directory where YOLO model files are stored.
+    Returns:
+        Path: Path to the latest YOLO model file.
+    Raises:
+        FileNotFoundError: If no YOLO model files are found in the specified directory.
+    """
+    yolo_files = sorted(
+        glob(str(Path(yolo_dir) / "*.pt")),
+        key=lambda f: os.path.getmtime(f),
+        reverse=True,
+    )
+    if not yolo_files:
+        raise FileNotFoundError(f"YOLO model file not found at {yolo_dir}/")
+    return Path(yolo_files[0])
 
 def page_to_image(page, dpi=300):
     zoom = dpi / 72
@@ -289,6 +306,7 @@ def process_pdf_pymu_tesseract(pdf_path, folder_output_path, overwrite=True):
     base_name = os.path.splitext(os.path.basename(pdf_path))[0]
     output_path = Path(folder_output_path) / f"{base_name}.json"
     # start_ram = psutil.Process().memory_info().rss / 1024**2
+    model = YOLO(get_latest_yolo_model_path())
 
     if not overwrite and check_json_file_exists(output_path):
         yield logging_process(

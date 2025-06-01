@@ -19,6 +19,7 @@ from pdf_process import (
     read_dataset,
     ensure_temp_dir,
     clear_temp_dir,
+    download_pdf,
     TEMP_DIR,
     TEMP_DIR_PDF,
 )
@@ -43,9 +44,9 @@ EXTENSION = {
 torch.classes.__path__ = []
 
 
-
 DATA_TEMP = Path("app/temp/data")
 os.makedirs(DATA_TEMP, exist_ok=True)
+
 
 # Initialize session state variables
 def init_session_state():
@@ -113,7 +114,9 @@ def prepare_export():
         progress_bar.progress(val, text="Preparing export...")
 
     try:
-        st.session_state["zip_path"] = zip_for_download(progress_callback=update_progress)
+        st.session_state["zip_path"] = zip_for_download(
+            progress_callback=update_progress
+        )
     except Exception:
         st.session_state["error_archive"] = True
         return
@@ -133,7 +136,7 @@ def prepare_export():
 def has_extracted_data(output_dir: str | Path, export_to_markdown: bool):
     if not os.path.exists(output_dir):
         return False
-    
+
     if st.session_state["method_option"] == "Docling":
         output_dir = os.path.join(output_dir, "docling_results")
     elif st.session_state["method_option"] == "PyMuPDF + Tesseract":
@@ -141,9 +144,13 @@ def has_extracted_data(output_dir: str | Path, export_to_markdown: bool):
 
     if export_to_markdown:
         # Use glob for efficient file matching
-        extracted_files = glob(pathname="**/*.json", root_dir=output_dir, recursive=True)
+        extracted_files = glob(
+            pathname="**/*.json", root_dir=output_dir, recursive=True
+        )
     elif st.session_state["method_option"] == "PyMuPDF + Tesseract":
-        extracted_files = glob(pathname="**/*.json", root_dir=output_dir, recursive=True)
+        extracted_files = glob(
+            pathname="**/*.json", root_dir=output_dir, recursive=True
+        )
     else:
         extracted_files = [f for f in os.listdir(output_dir) if f.endswith(".json")]
 
@@ -158,11 +165,13 @@ def cancel_processing():
     st.session_state["cancel_processing"] = True
     st.session_state["process_pdf_clicked"] = False
 
+
 def toast_upload_success():
     st.toast(
         "File uploaded successfully!",
         icon=":material/done_outline:",
     )
+
 
 # UI Components
 def render_sidebar():
@@ -187,21 +196,42 @@ def render_sidebar():
         key="overwrite",
     )
 
-    # Dataset handling
-    dataset_files = st.sidebar.file_uploader(
-        "Upload Dataset (CSV/Excel/PDF)",
-        type=["csv", "xlsx", "pdf"],
-        accept_multiple_files=True,
-        key=st.session_state["file_uploader_key"],
-        on_change=toast_upload_success,
-    )
+    # Selector tab for Dataset Upload or Download from URL
+    tab1, tab2 = st.sidebar.tabs(["Upload Dataset", "Download PDF from URL"])
+
+    with tab1:
+        # Dataset handling
+        dataset_files = st.file_uploader(
+            "Upload Dataset (CSV/Excel/PDF)",
+            type=["csv", "xlsx", "pdf"],
+            accept_multiple_files=True,
+            key=st.session_state["file_uploader_key"],
+            on_change=toast_upload_success,
+        )
+
+    with tab2:
+        url_pdf_file = st.text_input(
+            "Download PDF from URL",
+            placeholder="Enter PDF URL here",
+            key="pdf_url_input",
+            help="Enter a valid URL to download a PDF file.",
+        )
+        
+        if url_pdf_file:
+            results = download_pdf(url=url_pdf_file)
+
+            for result in results:
+                if result.get("status") == "success":
+                    st.toast(
+                        result.get("message", "PDF downloaded successfully."),
+                        icon=":material/done_outline:",
+                    )
 
     df = None
     column_list = []
 
     if dataset_files:
         for dataset_file in dataset_files:
-
             if re.search(r"\.(csv|xlsx)$", dataset_file.name, re.IGNORECASE):
                 temp_file_path = DATA_TEMP / dataset_file.name
                 with open(temp_file_path, "wb") as f:
@@ -443,9 +473,7 @@ def handle_download_pdfs(file_path, df, id_col, url_col):
         st.sidebar.error("Please upload a dataset and select ID and URL columns.")
 
 
-def handle_pdf_processing(
-    export_to_markdown, number_thread, overwrite
-):
+def handle_pdf_processing(export_to_markdown, number_thread, overwrite):
     ensure_temp_dir(TEMP_DIR_PDF)
     pdf_files = os.listdir(TEMP_DIR_PDF)
 
@@ -493,7 +521,9 @@ def handle_pdf_processing(
     )
 
     if process_pdf_btn:
-        st.session_state["cancel_processing"] = False  # Uncommented to enable processing
+        st.session_state["cancel_processing"] = (
+            False  # Uncommented to enable processing
+        )
 
         # Stop button
         stop_button_disabled = st.session_state["cancel_processing"]
@@ -561,7 +591,7 @@ def handle_pdf_processing(
                             )
                         else:
                             st.write(log.get("message", "Processing failed."))
-                    
+
                     status.update(
                         label=f"Processing: {idx}/{total_files} PDFs | Success {total_success} | Skipped {total_skipped} | Failed {total_failed}"
                     )
@@ -598,7 +628,6 @@ def handle_pdf_processing(
                         else:
                             st.write(log.get("message", "Processing failed."))
 
-
                     status.update(
                         label=f"Processing: {idx}/{total_files} PDFs | Success {total_success} | Skipped {total_skipped} | Failed {total_failed}"
                     )
@@ -620,51 +649,56 @@ def handle_pdf_processing(
 
     return pdf_files
 
+
 def clean_old_files(max_age_minutes=30):
     """Clean up old files and provide warnings before deletion."""
     now = datetime.now()
     expired_files = []
-    
+
     for file_path_str, meta in st.session_state["uploaded_files_meta"].items():
         file_path = Path(file_path_str)
         if "extracted_at" not in meta:
             continue
-            
+
         uploaded_time = datetime.fromisoformat(meta["extracted_at"])
         age = now - uploaded_time
         remaining = timedelta(minutes=max_age_minutes) - age
         remaining_minutes = int(remaining.total_seconds() // 60)
-        
+
         # Add warning flags if they don't exist
         if "warned_at_10" not in meta:
             meta["warned_at_10"] = False
         if "warned_at_5" not in meta:
             meta["warned_at_5"] = False
-            
+
         # Show warnings at specific thresholds
         if remaining_minutes <= 10 and not meta["warned_at_10"]:
             st.toast(f"⚠️ {file_path.name} will be deleted in 10 minutes!", icon="⏳")
             meta["warned_at_10"] = True
-            
+
         elif remaining_minutes <= 5 and not meta["warned_at_5"]:
             st.toast(f"🚨 {file_path.name} only 5 minutes until deletion!", icon="⏳")
             meta["warned_at_5"] = True
-            
+
         # Delete expired files
         if age > timedelta(minutes=max_age_minutes):
             try:
                 if os.path.exists(os.path.join(TEMP_DIR_PDF, file_path)):
                     os.remove(os.path.join(TEMP_DIR_PDF, file_path))
-                    st.toast(f"🧹 {file_path.name} has been automatically deleted", icon="✅")
+                    st.toast(
+                        f"🧹 {file_path.name} has been automatically deleted", icon="✅"
+                    )
                     expired_files.append(file_path_str)
 
                 if os.path.exists(os.path.join(DATA_TEMP, file_path)):
                     os.remove(os.path.join(DATA_TEMP, file_path))
-                    st.toast(f"🧹 {file_path.name} has been automatically deleted", icon="✅")
+                    st.toast(
+                        f"🧹 {file_path.name} has been automatically deleted", icon="✅"
+                    )
                     expired_files.append(file_path_str)
             except Exception as e:
                 st.warning(f"Failed to delete {file_path}: {e}")
-                
+
     # Remove deleted files from tracking
     for expired in expired_files:
         if expired in st.session_state["uploaded_files_meta"]:
@@ -675,7 +709,7 @@ def render_pdf_preview(pdf_files, export_to_markdown):
     if not pdf_files or len(pdf_files) == 0:
         st.info("No PDFs available for preview.")
         return
-    
+
     def update_selected_file(pdf_file):
         if pdf_file:
             st.session_state["selected_pdf"] = pdf_file
@@ -683,7 +717,9 @@ def render_pdf_preview(pdf_files, export_to_markdown):
     query_pdf = st.selectbox(
         "Select PDF to preview",
         options=pdf_files,
-        index=pdf_files.index(st.session_state["selected_pdf"]) if st.session_state["selected_pdf"] in pdf_files else 0,
+        index=pdf_files.index(st.session_state["selected_pdf"])
+        if st.session_state["selected_pdf"] in pdf_files
+        else 0,
         placeholder="Select a PDF file",
         help="Select a PDF file to preview.",
         on_change=update_selected_file,
@@ -696,9 +732,9 @@ def render_pdf_preview(pdf_files, export_to_markdown):
     if not query_pdf:
         st.info("Please select a PDF file to preview.")
         return
-    
+
     query_pdf = Path(query_pdf)
-    
+
     pdf_path = TEMP_DIR_PDF / query_pdf
     doc = pymupdf.open(pdf_path)
 
@@ -718,6 +754,7 @@ def render_pdf_preview(pdf_files, export_to_markdown):
         step=1,
         key="page_number",
     )
+    st.write(f"Page {page_number} of {doc.page_count}")
 
     pdf, result = st.columns(2, border=True)
 
@@ -761,6 +798,10 @@ def render_pdf_preview(pdf_files, export_to_markdown):
                 if 0 <= page_number - 1 < len(content):
                     selected_page = content[page_number - 1]["content"]
                     dur_per_page = content[page_number - 1].get("duration", 0)
+                    parse_score = content[page_number - 1].get("parse_score", 0)
+                    layout_score = content[page_number - 1].get("layout_score", 0)
+                    table_score = content[page_number - 1].get("table_score", 0) or 0
+                    ocr_score = content[page_number - 1].get("ocr_score", 0) or 0
 
                     raw_md_button = st.button(
                         "Copy Raw Markdown",
@@ -772,12 +813,16 @@ def render_pdf_preview(pdf_files, export_to_markdown):
                         st.session_state["already_copied"] = True
                         st.rerun()
 
-                    with st.expander("Processing Time Details", expanded=False):
-                        st.info(
-                            f"Total processing time for this page: {time.strftime('%H:%M:%S', time.gmtime(dur_per_page))}"
-                        )
-                        st.info(
-                            f"Total processing time for the entire document: {time.strftime('%H:%M:%S', time.gmtime(total_duration))}"
+                    with st.expander("Processing Details", expanded=False):
+                        st.markdown(
+                            f"""
+                            - **Total Duration**: {total_duration:.2f} seconds
+                            - **Time for Page {page_number}**: {dur_per_page:.2f} seconds
+                            - **Parse Score**: {parse_score:.4f}
+                            - **Layout Score**: {layout_score:.4f}
+                            - **Table Score**: {table_score:.4f}
+                            - **OCR Score**: {ocr_score:.4f}
+                            """
                         )
                     with st.container(key="markdown_result", height=600):
                         st.write(selected_page, unsafe_allow_html=True)
@@ -816,7 +861,7 @@ def main():
     if st.session_state.get("already_exported"):
         st.toast("Export completed!", icon="✅")
         st.session_state["already_exported"] = False
-    
+
     if st.session_state.get("already_copied"):
         st.toast("Markdown copied to clipboard!", icon="✅")
         st.session_state["already_copied"] = False
@@ -824,7 +869,9 @@ def main():
     # Handle downloads
     if download_button:
         try:
-            handle_download_pdfs(st.session_state["temp_file_path"], df, id_col, url_col)
+            handle_download_pdfs(
+                st.session_state["temp_file_path"], df, id_col, url_col
+            )
         except Exception as e:
             st.error("Error during downloading PDFs: Please check your dataset")
 
@@ -836,13 +883,10 @@ def main():
         st.sidebar.success("Temporary files cleared.")
         st.rerun()
     # Clean old files
-    clean_old_files(max_age_minutes=3)
+    clean_old_files(max_age_minutes=30)
 
     # PDF processing
-    pdf_files = handle_pdf_processing(
-        export_to_markdown, number_thread, overwrite
-    )
-
+    pdf_files = handle_pdf_processing(export_to_markdown, number_thread, overwrite)
 
     # PDF Preview
     if pdf_files:
