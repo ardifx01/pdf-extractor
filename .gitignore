@@ -180,3 +180,5 @@ app/temp
 *.zip
 *.ipynb
 *models*
+*.png
+*.pdf
