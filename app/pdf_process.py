@@ -3,6 +3,7 @@ import shutil
 import time
 import random
 from pathlib import Path
+from typing import List
 import pymupdf
 import re
 
@@ -10,6 +11,8 @@ import pandas as pd
 import requests
 
 from urllib.parse import urlparse
+
+from sympy import use
 
 # Constants
 TEMP_DIR_PDF = Path("app/temp/pdf")
@@ -44,11 +47,15 @@ def is_pdf_valid_but_repaired(filename: str) -> bool:
         return False  # File bisa dibuka, tapi sebenarnya rusak
     return True
 
-def ensure_temp_dir(dir_name: str | Path = TEMP_DIR):
+def ensure_temp_dir(dir_name: str | Path | List[str] | List[Path] = TEMP_DIR):
     """Ensure the temporary directory exists."""
-    os.makedirs(dir_name, exist_ok=True)
+    if isinstance(dir_name, list):
+        for sub_dir in dir_name:
+            os.makedirs(sub_dir, exist_ok=True)
+    else:
+        os.makedirs(dir_name, exist_ok=True)
 
-def download_pdf(id: str = None, url: str = None):
+def download_pdf(id: str = None, url: str = None, use_specific_id: bool = False):
     """
     Download a PDF file from a URL and save it to TEMP_DIR.
     Retries up to 3 times if download fails.
@@ -66,9 +73,9 @@ def download_pdf(id: str = None, url: str = None):
 
     for attempt in range(1, max_retries + 1):
         try:
-            if id:
+            if use_specific_id and id:
                 filename = TEMP_DIR_PDF / f"{id}.pdf"
-            elif url:
+            elif not use_specific_id and url:
                 filename = TEMP_DIR_PDF / f"{urlparse(url).path.split('/')[-1]}"
             else:
                 yield {
@@ -142,7 +149,12 @@ def read_dataset(dataset_file: str | Path) -> pd.DataFrame:
     else:
         raise ValueError("Unsupported file format. Please provide a CSV or Excel file.")
 
-def handle_pdf_download_from_dataset(dataset_file: str, id_col: str, url_col: str):
+def handle_pdf_download_from_dataset(
+    dataset_file: str,
+    id_col: str,
+    url_col: str,
+    use_specific_id: bool = False,
+):
     """
     Download PDFs from a dataset CSV or Excel file.
 
@@ -150,18 +162,21 @@ def handle_pdf_download_from_dataset(dataset_file: str, id_col: str, url_col: st
         dataset_file (str): Path to the dataset file.
         id_col (str): Column name for the ID.
         url_col (str): Column name for the URL.
+        use_specific_id (bool): Whether to use a specific ID for downloading.
 
     Yields:
-        str: Status message for each download attempt.
+        dict: Status message for each download attempt.
     """
     ensure_temp_dir(TEMP_DIR)
     df = read_dataset(dataset_file)
     for _, row in df.iterrows():
-        id = str(row[id_col])
+        pdf_id = None
+        if use_specific_id:
+            pdf_id = str(row[id_col])
+        else:
+            pdf_id = None
         url = row[url_col]
-        for status in download_pdf(id, url):
-            yield status
-    
+        yield from download_pdf(pdf_id, url, use_specific_id=use_specific_id)
 
 def clear_temp_dir(dir_name: str | Path):
     """Clear the temporary directory when all processes are done."""

@@ -8,7 +8,7 @@ import pymupdf
 from pymupdf import Page
 from ultralytics import YOLO
 import math
-import re
+import logging
 
 from docling_core.types.doc import PictureItem, TextItem
 
@@ -30,6 +30,7 @@ from helper import logging_process, check_json_file_exists
 import warnings
 from glob import glob
 warnings.filterwarnings("ignore")
+_log = logging.getLogger(__name__)
 
 # --- Constants ---
 OUTPUT_DIR = Path("app/results")
@@ -132,6 +133,7 @@ def extract_text_from_pdf_page(
         - doc_conversion_secs (float): Time taken for document conversion.
     """
 
+    logging.basicConfig(level=logging.INFO)
     # Check if the models are already downloaded
     if not os.path.exists(ARTIFACT_PATH):
         download_models(output_dir=ARTIFACT_PATH, progress=True)
@@ -144,10 +146,8 @@ def extract_text_from_pdf_page(
     pipeline_options.accelerator_options = accelerator_options
     pipeline_options.do_ocr = True
     pipeline_options.do_table_structure = True
-    # pipeline_options.do_table_structure = False
     pipeline_options.images_scale = 2.0
     pipeline_options.table_structure_options.do_cell_matching = True
-    # pipeline_options.table_structure_options.do_cell_matching = False
     pipeline_options.generate_picture_images = True
     settings.debug.profile_pipeline_timings = True
 
@@ -282,6 +282,15 @@ def process_pdf(
                     create_markdown,
                     number_thread,
                 )
+                with pymupdf.open() as temp_pdf:
+                    temp_pdf.insert_pdf(
+                        pdf,
+                        from_page=page.number,
+                        to_page=page.number,
+                        links=False,
+                        widgets=False,
+                    )
+                    temp_pdf.save(str(page_pdf_path), garbage=4, deflate=True)
 
                 if markdown_text is None:
                     yield logging_process(
