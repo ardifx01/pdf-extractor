@@ -8,7 +8,7 @@ import gc
 from export_results import ARTIFACT_PATH
 from pdf_process import ensure_temp_dir
 
-from helper import logging_process
+from helper import logging_process, check_json_file_exists
 
 PARAM = {
     "language": "id",
@@ -74,49 +74,51 @@ def preprocess_audio(file_path, format="wav", sample_rate=16000, channels=1):
     audio.export(processed_path, format=format)
     return str(processed_path)
 
-def transcribe_audio(file_path, model_type="large"):
+def transcribe_audio(file_path, model_type="large", overwrite=True):
     """
     Transcribe audio file using Whisper model.
-    
+
     Args:
         file_path (str): Path to the audio file.
         model_type (str): Type of Whisper model to use.
-        
-    Returns:
-        dict: Transcription result.
+        overwrite (bool): Whether to overwrite existing results.
+
+    Yields:
+        str: Logging messages during the process.
     """
-    # Check if the file is a supported audio/video file
-    if not file_path.lower().endswith((".mp3", ".wav", ".m4a", ".mp4", ".mov", ".flac", ".aac", ".ogg")):
-        yield logging_process("error", f"Unsupported file type for transcription: {file_path}")
+    file_path_obj = Path(file_path)
+    output_file = OUTPUT_DIR / f"{file_path_obj.stem}.json"
+
+    if not overwrite and check_json_file_exists(output_file):
+        yield logging_process(
+            "info", f"[SKIP] JSON result already exists for {file_path_obj.name}, skipping."
+        )
+        return
+
+    if file_path_obj.suffix.lower() not in (".mp3", ".wav", ".m4a", ".mp4", ".mov", ".flac", ".aac", ".ogg"):
+        yield logging_process("error", f"Unsupported file type for conversion: {file_path}")
         return
 
     yield logging_process("info", f"Processing audio file: {file_path}")
-    audio = preprocess_audio(file_path)
+    processed_audio = preprocess_audio(file_path)
 
     yield logging_process("info", f"Transcribing audio file: {file_path}")
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model = whisper.load_model(model_type, device=device, download_root=str(ARTIFACT_PATH))
 
-    result = model.transcribe(str(audio), **PARAM)
-
+    result = model.transcribe(str(processed_audio), **PARAM)
     segments = result.get("segments", [])
-    minute_chunks = group_segments_by_minute(
-        segments, chunk_length=60
-    )
+    minute_chunks = group_segments_by_minute(segments, chunk_length=60)
 
-    file_path = Path(file_path)
-    output_file = OUTPUT_DIR / f"{file_path.stem}.json"
     output_file.parent.mkdir(parents=True, exist_ok=True)
-
     with open(output_file, "w", encoding="utf-8") as f:
-        json.dump(
-            minute_chunks, f, ensure_ascii=False, indent=4
-        )
+        json.dump(minute_chunks, f, ensure_ascii=False, indent=4)
+
     yield logging_process(
         "success",
-        f"Transcription completed for {file_path.name}"
+        f"Transcription completed for {file_path_obj.name}"
     )
 
     # Clean up resources to free memory
-    del model, audio, result, minute_chunks
+    del model, processed_audio, result, minute_chunks
     gc.collect()

@@ -15,7 +15,7 @@ import gc
 from dotenv import load_dotenv
 from pathlib import Path
 
-from helper import logging_process
+from helper import logging_process, check_json_file_exists
 
 load_dotenv()
 
@@ -218,24 +218,36 @@ def compute_avg_confidence(page):
     return round(sum(all_confidences) / len(all_confidences), 4) if all_confidences else 0.0
 
 def transcribe_pdf_with_azureDocIntelligent(
-    file:str, model_yolo=MODEL_YOLO, output_dir=OUTPUT_DIR, temp_dir=TEMP_PDF_DIR
+    file: str, model_yolo=MODEL_YOLO, output_dir=OUTPUT_DIR, temp_dir=TEMP_PDF_DIR, overwrite=True
 ):
-    """Main function to transcribe PDF using Azure Document Intelligence and YOLO."""
+    """Transcribe PDF using Azure Document Intelligence and YOLO, yielding progress logs."""
     endpoint = os.environ.get("AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT")
     key = os.environ.get("AZURE_DOCUMENT_INTELLIGENCE_KEY")
+
+    file_name = Path(file).stem
+    output_folder = output_dir 
+    os.makedirs(output_folder, exist_ok=True)
+    output_json_path = Path(output_folder) / f"{file_name}.json"
+    print(check_json_file_exists(output_json_path))
+
+    if not overwrite and check_json_file_exists(output_json_path):
+        print("ini di JSON")
+        yield logging_process(
+            "info", f"[SKIP] JSON result already exists for {file_name}, skipping."
+        )
+        return
+
     try:
         result_json = {
             "content": [],
-            "total_pages": 0,
+            "total_page": 0,
             "total_time": 0,
         }
-        file_name = Path(file).stem
-        start_time = time.time()
         result = get_doc_Intelligent_Result(file, endpoint, key)
         page_count = len(result.pages)
         print(f"\n\n📘 Starting to read file: {file_name} | Total pages: {page_count} -----")
         detected_tables = []
-        if result.tables:
+        if getattr(result, "tables", None):
             for i, table in enumerate(result.tables, 1):
                 table_key = f"table_{i}"
                 bounding_region = table.get("boundingRegions", [{}])[0]
@@ -251,18 +263,18 @@ def transcribe_pdf_with_azureDocIntelligent(
                         "content": content,
                     }
                 )
+        result_json["total_pages"] = page_count
         pages_with_tables = {table["page"] for table in detected_tables}
         pages_str = ", ".join(str(page) for page in sorted(pages_with_tables))
         print(f"File contains tables on pages {pages_str}\n")
-        local_pdf_path = download_pdf_if_url(file) if isinstance(file, str) and file.startswith("http") else file
-        output_folder = output_dir
 
-        os.makedirs(output_folder, exist_ok=True)
-        output_json_path = os.path.join(output_folder, f"{file_name}.json")
+        local_pdf_path = download_pdf_if_url(file) if isinstance(file, str) and file.startswith("http") else file
+
         total_page_time = 0
         for page in result.pages:
             print(f"\n---- Processing Page #{page.page_number} ----")
             page_number = page.page_number
+            page_start_time = time.time()
             if page_number in pages_with_tables:
                 print("\n Page contains a table, using Table conversion algorithm")
                 page_text = process_page_with_table(
@@ -276,9 +288,8 @@ def transcribe_pdf_with_azureDocIntelligent(
             full_text = clean_text("\n".join(page_text))
             avg_confidence = compute_avg_confidence(page)
             print(f"📄 Page {page_number} - Average confidence score: {avg_confidence}")
-        
-            end_time = time.time()
-            elapsed_time = end_time - start_time
+
+            elapsed_time = time.time() - page_start_time
             total_page_time += elapsed_time
             result_json["content"].append(
                 {
@@ -294,18 +305,17 @@ def transcribe_pdf_with_azureDocIntelligent(
                 f"Processed page {page_number}/{page_count} of {file_name} in {time.strftime('%H:%M:%S', time.gmtime(elapsed_time))}"
             )
 
-            del (
-                page_text, full_text, avg_confidence
-            )
-
+            del page_text, full_text, avg_confidence
             gc.collect()
 
-            with open(output_json_path, "w+", encoding="utf-8") as f:
+            with open(output_json_path, "w", encoding="utf-8") as f:
                 json.dump(result_json, f, ensure_ascii=False, indent=2)
+
+        result_json["total_time"] = total_page_time
 
         with open(output_json_path, "w", encoding="utf-8") as f:
             json.dump(result_json, f, ensure_ascii=False, indent=2)
-            
+
         total_minutes, total_seconds = divmod(total_page_time, 60)
         yield logging_process(
             "info",
@@ -317,7 +327,8 @@ def transcribe_pdf_with_azureDocIntelligent(
 
     except Exception as e:
         yield logging_process(
-            "error", 
+            "error",
             f"An error occurred during transcription: {str(e)}"
         )
+        print(f"[ERROR] An error occurred during transcription: {str(e)}")
 
