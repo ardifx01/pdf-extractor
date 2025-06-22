@@ -8,7 +8,6 @@ import pymupdf
 from pymupdf import Page
 from ultralytics import YOLO
 import math
-import logging
 
 from docling_core.types.doc import PictureItem, TextItem
 
@@ -30,7 +29,6 @@ from helper import logging_process, check_json_file_exists
 import warnings
 from glob import glob
 warnings.filterwarnings("ignore")
-_log = logging.getLogger(__name__)
 
 # --- Constants ---
 OUTPUT_DIR = Path("app/results")
@@ -132,8 +130,6 @@ def extract_text_from_pdf_page(
         - text (str): Extracted text from the PDF page.
         - doc_conversion_secs (float): Time taken for document conversion.
     """
-
-    logging.basicConfig(level=logging.INFO)
     # Check if the models are already downloaded
     if not os.path.exists(ARTIFACT_PATH):
         download_models(output_dir=ARTIFACT_PATH, progress=True)
