@@ -1,9 +1,12 @@
-"""This is a helper module for processing PDF such as logging and checking"""
+"""This is a helper module for processing PDF such as 
+logging process status and checking JSON file existence.
+"""
 
 import os
 import json
 from pathlib import Path
 from typing import Any
+
 
 def logging_process(status: str, message: str):
     """Logs the process status and message.
@@ -19,6 +22,7 @@ def logging_process(status: str, message: str):
         "status": status,
         "message": message,
     }
+
 
 def check_json_file_exists(file_path: Any | Path):
     """Checks if a JSON file exists and is have content.
