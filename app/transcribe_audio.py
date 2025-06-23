@@ -16,7 +16,8 @@ PARAM = {
     "temperature": 0.0,
     "no_speech_threshold": 0.9,
     "logprob_threshold":-2.0,
-    "verbose":True,
+    "verbose":False,
+    "word_timestamps": False,
 }
 VIDEO_PATH = Path("app/temp/video")
 WAV_PATH = Path("app/temp/wav")
@@ -99,10 +100,10 @@ def transcribe_audio(file_path, model_type="large", overwrite=True):
         yield logging_process("error", f"Unsupported file type for conversion: {file_path}")
         return
 
-    yield logging_process("info", f"Processing audio file: {file_path}")
+    yield logging_process("info", f"Processing audio file: {file_path_obj.name}")
     processed_audio = preprocess_audio(file_path)
 
-    yield logging_process("info", f"Transcribing audio file: {file_path}")
+    yield logging_process("info", f"Transcribing audio file: {file_path_obj.name}")
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model = whisper.load_model(model_type, device=device, download_root=str(ARTIFACT_PATH))
 

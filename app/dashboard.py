@@ -529,7 +529,7 @@ def handle_pdf_processing(export_to_markdown, number_thread, overwrite):
     method_option_select = method_options.selectbox(
         "Select Processing Method",
         options=method,
-        index=1,
+        index=0,
         key="method_option",
     )
 
@@ -921,6 +921,11 @@ def render_preview_file(files, export_to_markdown):
                 "Whisper AI is not applicable for PDF files. Please select another method."
             )
             return
+        elif is_video and st.session_state["method_option"] != "Whisper AI":
+            st.error(
+                "Whisper AI is required for video files. Please select Whisper AI method."
+            )
+            return
         if os.path.exists(result_path):
             with open(result_path, "r", encoding="utf-8") as f:
                 json_result = json.load(f)
@@ -973,7 +978,7 @@ def render_preview_file(files, export_to_markdown):
                                     st.text_area(
                                         f"Transcript Segment {idx+1}",
                                         c.get("content", ""),
-                                        height=100,
+                                        height=200,
                                         key=f"video_transcript_{query_file.stem}_{idx}"
                                     )
                     else:
