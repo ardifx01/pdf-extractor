@@ -66,7 +66,7 @@ We test two methods to run this project, we can concluded:
     Install the required Python packages:
 
     ```bash
-    pip install -r requirements-cpu.txt
+    pip install -r requirements.txt
     ```
 
 6. **Install Tesseract OCR**
