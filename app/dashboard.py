@@ -936,9 +936,9 @@ def render_preview_file(files, export_to_markdown):
                 # For PDF: show per-page markdown; for video: show transcript
                 if is_pdf and 0 <= page_number - 1 < len(content):
                     selected_page = content[page_number - 1]["content"]
-                    dur_per_page = content[page_number - 1].get("duration", 0)
-                    parse_score = content[page_number - 1].get("parse_score", 0)
-                    layout_score = content[page_number - 1].get("layout_score", 0)
+                    dur_per_page = content[page_number - 1].get("duration", 0) or 0
+                    parse_score = content[page_number - 1].get("parse_score", 0) or 0
+                    layout_score = content[page_number - 1].get("layout_score", 0) or 0
                     table_score = content[page_number - 1].get("table_score", 0) or 0
                     ocr_score = content[page_number - 1].get("ocr_score", 0) or 0
 

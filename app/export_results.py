@@ -130,10 +130,6 @@ def extract_text_from_pdf_page(
         - text (str): Extracted text from the PDF page.
         - doc_conversion_secs (float): Time taken for document conversion.
     """
-    # Check if the models are already downloaded
-    if not os.path.exists(ARTIFACT_PATH):
-        download_models(output_dir=ARTIFACT_PATH, progress=True)
-
     accelerator_options = AcceleratorOptions(
         num_threads=number_thread, device=AcceleratorDevice.AUTO
     )
@@ -147,16 +143,16 @@ def extract_text_from_pdf_page(
     pipeline_options.generate_picture_images = True
     settings.debug.profile_pipeline_timings = True
 
-    # pipeline_options.ocr_options = TesseractCliOcrOptions(
-    #     lang=["eng", "id"],
-    #     force_full_page_ocr=force_full_page_ocr,
-    #     tesseract_cmd="tesseract",
-    # )
-
-    pipeline_options.ocr_options = EasyOcrOptions(
-        lang=["en", "id"],
+    pipeline_options.ocr_options = TesseractCliOcrOptions(
+        lang=["eng", "id"],
         force_full_page_ocr=force_full_page_ocr,
+        tesseract_cmd="tesseract",
     )
+
+    # pipeline_options.ocr_options = EasyOcrOptions(
+    #     lang=["en", "id"],
+    #     force_full_page_ocr=force_full_page_ocr,
+    # )
 
     converter = DocumentConverter(
         allowed_formats=[InputFormat.PDF, InputFormat.IMAGE],
@@ -207,6 +203,15 @@ def process_pdf(
     model = YOLO(MODEL_YOLO)
     base_name = Path(pdf_file).stem
     pdf_path = pdf_file
+
+    list_models = [f for f in ARTIFACT_PATH.rglob("*") if f.is_file()]
+    if not list_models:
+        # Check if the models are already downloaded
+        # If not, download them
+        print("Models not found, downloading...")
+        download_models(
+            output_dir=ARTIFACT_PATH, progress=True
+        )  # Ensure models are downloaded
 
     if create_markdown:
         result_dir = output_dir / base_name
