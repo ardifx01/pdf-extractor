@@ -54,10 +54,13 @@ We test two methods to run this project, we can concluded:
 4. **Activate the virtual environment**
 
     - On Windows:
+
         ```bash
         venv\Scripts\activate
         ```
+
     - On macOS/Linux:
+
         ```bash
         source venv/bin/activate
         ```
@@ -77,16 +80,32 @@ We test two methods to run this project, we can concluded:
         ```bash
         brew install tesseract
         ```
+
     - **Linux**: Use the package manager to install Tesseract:
 
         ```bash
         sudo apt-get install tesseract-ocr
         ```
 
-7. **Run the application**
+7. **Install ffmpeg** (for video processing)
+    - **Windows**: Download the latest release from [FFmpeg](https://ffmpeg.org/download.html) and add it to your PATH.
+    - **macOS**: Use Homebrew:
+
+        ```bash
+        brew install ffmpeg
+        ```
+
+    - **Linux**: Use the package manager:
+
+        ```bash
+        sudo apt-get install ffmpeg
+        ```
+
+8. **Run the application**
     Start the Streamlit application:
 
     ```bash
     streamlit run app\dashboard.py
     ```
-8. **Access the Web Interface**
+
+9. **Access the Web Interface**
