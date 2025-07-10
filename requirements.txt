@@ -134,7 +134,6 @@ streamlit-pdf-viewer==0.0.23
 sympy==1.14.0
 tabulate==0.9.0
 tenacity==9.1.2
-tesserocr @ file:///C:/Users/Asus/Documents/Magang/pdf-extractor/tesserocr-2.8.0-cp312-cp312-win_amd64.whl
 tifffile==2025.6.11
 tiktoken==0.9.0
 tokenizers==0.21.2
