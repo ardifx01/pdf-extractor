@@ -10,11 +10,11 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class YoloProcessor:
-    def __init__(self, model: Optional[str | Path] = None):
-        if not model:
-            model = self.get_latest_model()
-        logger.info(f"Loaded YOLO model from {Path(model).stem}")
-        self.model = YOLO(model)
+    def __init__(self, model_path: Optional[str | Path] = None):
+        if not model_path:
+            model_path = self.get_latest_model()
+        logger.info(f"Loaded YOLO model from {Path(model_path).stem}")
+        self.model = YOLO(model_path)
 
     def get_latest_model(self) -> Path:
         """Get the latest YOLO model file from the YOLO directory."""
@@ -133,7 +133,7 @@ if __name__ == "__main__":
         # Example usage
         result = yolo_processor.exclude_object(
             page=page,
-            class_names=0,
+            class_names="Non-Text",
         )
 
         # Preview the modified page
