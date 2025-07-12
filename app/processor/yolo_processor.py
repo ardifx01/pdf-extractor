@@ -133,7 +133,7 @@ if __name__ == "__main__":
         # Example usage
         result = yolo_processor.exclude_object(
             page=page,
-            class_names="Non-Text",
+            class_names=0,
         )
 
         # Preview the modified page
