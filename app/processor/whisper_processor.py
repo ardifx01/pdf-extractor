@@ -109,7 +109,7 @@ class WhisperProcessor:
             yield log_process("info", f"Transcribing audio file: {file_path.name}")
 
             transcription = self.model.transcribe(
-                processed_audio, **self.params, verbose=True
+                processed_audio, **self.params
             )
             segments = transcription.get("segments", [])
 
