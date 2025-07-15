@@ -62,7 +62,7 @@ class DoclingProcessor:
             logger.warning(
                 "No models found in ARTIFACT_DIR. Downloading default models."
             )
-            download_models(with_easyocr=False, progress=True, output_dir=ARTIFACT_DIR)
+            download_models(progress=True, output_dir=ARTIFACT_DIR)
 
         if self.create_markdown:
             result_path = self.output_dir / base_name
@@ -112,7 +112,21 @@ class DoclingProcessor:
                         )
                         temp_pdf.save(page_pdf_path, garbage=4, deflate=True)
 
-                    result_text, conversion_time, confidence = self._extract_text()
+                    result_text, conversion_time, confidence = self._extract_text(file_path=page_pdf_path)
+                    
+                    if result_text is None:
+                        logger.warning(
+                            f"No text extracted from page {page_index} of {self.input_path.name}. Retrying with OCR."
+                        )
+                        yield log_process(
+                            "info",
+                            f"No text extracted from page {page_index} of {self.input_path.name}. Retrying with OCR.",
+                        )
+                        result_text, conversion_time, confidence = self._extract_text(
+                            file_path=page_pdf_path,
+                            force_ocr=True
+                        )
+
                     total_times += conversion_time
 
                     temp_json = {
@@ -169,8 +183,8 @@ class DoclingProcessor:
             raise e
 
     def _extract_text(
-        self, force_ocr: bool = False,
-    ) -> tuple[str, float, dict[str, Any]]:
+        self, file_path: Path, force_ocr: bool = False,
+    ):
         """Extract text from the PDF document."""
         accelerator_options = AcceleratorOptions(
             num_threads=4 if self.number_threads is None else self.number_threads,
@@ -186,10 +200,17 @@ class DoclingProcessor:
 
         settings.debug.profile_pipeline_timings = True
 
-        pipeline_options.ocr_options = TesseractCliOcrOptions(
-            lang=["eng", "id"],
+        pipeline_options.ocr_options = EasyOcrOptions(
+            lang=["en", "id"],
             force_full_page_ocr=force_ocr,
+            download_enabled=True,
         )
+
+        # pipeline_options.ocr_options = TesseractCliOcrOptions(
+        #     lang=["eng", "ind"],
+        #     force_full_page_ocr=force_ocr,
+        #     tesseract_cmd="tesseract",
+        # )
 
         converter = DocumentConverter(
             allowed_formats=[InputFormat.PDF],
@@ -200,21 +221,21 @@ class DoclingProcessor:
             },
         )
 
-        converter_result = converter.convert(self.input_path)
+        converter_result = converter.convert(file_path)
         text = converter_result.document.export_to_markdown(escape_underscores=False)
         conversion_time = round(converter_result.timings["pipeline_total"].times[0], 2)
-        print(f"Conversion time: {conversion_time} seconds")
 
         confidence = converter_result.confidence.model_dump()
 
         if len(text.strip()) == 0 and not force_ocr:
+            print(f"No text extracted from {file_path.name}. Retrying with OCR.")
             logger.warning(
-                f"No text extracted from {self.input_path.name}. Retrying with OCR."
+                f"No text extracted from {file_path.name}. Retrying with OCR."
             )
-            return self._extract_text(force_ocr=True)
+            return None, conversion_time, confidence
 
         if self.create_markdown:
-            markdown_path = self.output_dir / self.input_path.stem / f"{self.input_path.stem}.md"
+            markdown_path = self.output_dir / self.input_path.stem / f"{file_path.stem}.md"
             with open(markdown_path, "w+", encoding="utf-8") as f:
                 f.write(text)
             logger.info(f"Markdown file created at {markdown_path}")

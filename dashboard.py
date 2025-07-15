@@ -200,10 +200,11 @@ def render_sidebar():
     tab1, tab2 = st.sidebar.tabs(["Upload Dataset", "Download PDF from URL"])
 
     with tab1:
+        allowed_extensions = [v for ext in EXTENSION.values() for v in ext]
         # Dataset handling
         dataset_files = st.file_uploader(
             "Upload Dataset (CSV/Excel/PDF/Video)",
-            type=["csv", "xlsx", "pdf", "mp4", "avi", "mov", "mkv"],
+            type=allowed_extensions,
             accept_multiple_files=True,
             key=st.session_state["file_uploader_key"],
             on_change=toast_upload_success,
@@ -600,6 +601,10 @@ def handle_pdf_processing(export_to_markdown, number_thread, overwrite):
                             page_processing_slot_status.info(
                                 log.get("message", "Processing skipped.")
                             )
+                        elif log.get("status") == "info":
+                            page_processing_slot_status.info(
+                                log.get("message", "Processing info.")
+                            )
                         elif log.get("status") == "success":
                             total_success += 1
                             file_status.success(
@@ -634,6 +639,10 @@ def handle_pdf_processing(export_to_markdown, number_thread, overwrite):
                             page_processing_slot_status.info(
                                 log.get("message", "Processing skipped.")
                             )
+                        elif log.get("status") == "info":
+                            page_processing_slot_status.info(
+                                log.get("message", "Processing info.")
+                            )
                         elif log.get("status") == "success":
                             total_success += 1
                             file_status.success(
@@ -659,17 +668,23 @@ def handle_pdf_processing(export_to_markdown, number_thread, overwrite):
                 # Need Attention: Penyesuaian untuk Azure Doc Intelligence
                 if method_option_select == "Azure Doc Intelligence":
                     processor = AzureAIProcessor(
-                        endpoint=os.environ.get("AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT", ""),
-                        key=os.environ.get("AZURE_DOCUMENT_INTELLIGENCE_KEY", ""), 
+                        endpoint=os.environ.get(
+                            "AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT", ""
+                        ),
+                        key=os.environ.get("AZURE_DOCUMENT_INTELLIGENCE_KEY", ""),
                     )
-                    for log in processor.transcribe_pdf(file=str(TEMP_DIR / "pdf" / file_name), overwrite=overwrite):
-                        if log.get("status") == "info":
-                            msg = log.get("message", "SKIP")
-                            if "[SKIP]" in msg:
-                                total_success += 1
-                                total_skipped += 1
+                    for log in processor.transcribe_pdf(
+                        file=str(TEMP_DIR / "pdf" / file_name), overwrite=overwrite
+                    ):
+                        if log.get("status") == "skip":
+                            total_success += 1
+                            total_skipped += 1
                             page_processing_slot_status.info(
                                 log.get("message", "Processing skipped.")
+                            )
+                        elif log.get("status") == "info":
+                            page_processing_slot_status.info(
+                                log.get("message", "Processing info.")
                             )
                         elif log.get("status") == "success":
                             total_success += 1
@@ -692,7 +707,9 @@ def handle_pdf_processing(export_to_markdown, number_thread, overwrite):
                 if method_option_select == "Whisper AI":
                     processor = WhisperProcessor(language="id", overwrite=overwrite)
 
-                    category = TEMP_DIR_MAP.get("video", []) + TEMP_DIR_MAP.get("audio", [])
+                    category = TEMP_DIR_MAP.get("video", []) + TEMP_DIR_MAP.get(
+                        "audio", []
+                    )
                     extension = Path(file_name).suffix.lower()
                     if extension.split(".")[-1] not in category:
                         file_status.error(
@@ -703,13 +720,15 @@ def handle_pdf_processing(export_to_markdown, number_thread, overwrite):
                     for log in processor.transcribe_audio(
                         file_path=TEMP_DIR / "video" / file_name,
                     ):
-                        if log.get("status") == "info":
-                            msg = log.get("message", "SKIP")
-                            if "[SKIP]" in msg:
-                                total_success += 1
-                                total_skipped += 1
+                        if log.get("status") == "skip":
+                            total_success += 1
+                            total_skipped += 1
                             page_processing_slot_status.info(
                                 log.get("message", "Processing skipped.")
+                            )
+                        elif log.get("status") == "info":
+                            page_processing_slot_status.info(
+                                log.get("message", "Processing info.")
                             )
                         elif log.get("status") == "success":
                             total_success += 1
@@ -1055,8 +1074,3 @@ def main():
 
 
 main()
-
-# Cleanup on exit
-atexit.register(shutil.rmtree, TEMP_DIR)
-atexit.register(shutil.rmtree, OUTPUT_DIR)
-atexit.register(shutil.rmtree, TEMP_DIR / "pdf")
