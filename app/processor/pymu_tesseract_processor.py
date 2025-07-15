@@ -68,6 +68,7 @@ class PymuTesseractProcessor:
     def process_pdf(self):
         base_name = self.input_path.stem
         output_file = self.output_dir / f"{base_name}.json"
+        model = YoloProcessor().model
 
         if not self.overwrite and check_json_file_exists(output_file):
             logger.info(
@@ -81,20 +82,20 @@ class PymuTesseractProcessor:
 
         try:
             with pymupdf.open(self.input_path) as doc:
-                result_json = {"content": [], "total_page": doc.page_count}
+                result_json = {"content": [], "total_pages": doc.page_count}
                 total_pages = doc.page_count
                 total_times = 0.0
 
                 for i, page in enumerate(doc.pages()):
                     start_time = time.time()
                     yield log_process(
-                        "start",
-                        f"Processing page {i + 1}/{total_pages} of {base_name}.",
+                        "info",
+                        f"Processing page {i + 1}/{total_pages} of {base_name}",
                     )
 
                     # Placeholder for actual extraction logic
                     content, confidence = self.extract_pdf_single_page(
-                        doc, base_name, YoloProcessor().model, i
+                        doc, base_name, model, i
                     )
 
                     duration = round(time.time() - start_time, 2)

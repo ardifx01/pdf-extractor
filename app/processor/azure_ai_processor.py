@@ -240,12 +240,10 @@ class AzureAIProcessor:
         output_folder = output_dir
         os.makedirs(output_folder, exist_ok=True)
         output_json_path = Path(output_folder) / f"{file_name}.json"
-        logger.info(check_json_file_exists(output_json_path))
 
         if not overwrite and check_json_file_exists(output_json_path):
-            logger.info("ini di JSON")
             yield log_process(
-                "info", f"[SKIP] JSON result already exists for {file_name}, skipping."
+                "skip", f"[SKIP] JSON result already exists for {file_name}, skipping."
             )
             return
 
@@ -306,7 +304,7 @@ class AzureAIProcessor:
                     {
                         "page": page_number,
                         "content": full_text,
-                        "avg_confident": avg_confidence,
+                        "confidence": avg_confidence,
                         "duration": elapsed_time,
                     }
                 )
@@ -329,7 +327,7 @@ class AzureAIProcessor:
 
             total_minutes, total_seconds = divmod(total_page_time, 60)
             yield log_process(
-                "info",
+                "success",
                 f"Total time for all pages: {int(total_minutes)} minutes {total_seconds:.2f} seconds",
             )
             logger.info(

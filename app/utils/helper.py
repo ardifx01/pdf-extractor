@@ -62,7 +62,7 @@ def check_json_file_exists(file_path: Union[str, Path]) -> bool:
     if file_path.exists():
         try:
             json_content = json.loads(file_path.read_text(encoding="utf-8"))
-            total_pages = json_content.get("total_page", 0) or 0
+            total_pages = json_content.get("total_pages", 0) or 0
             total_page_extracted = len(json_content.get("content", [])) or 0
             return total_pages == total_page_extracted
         except ValueError:

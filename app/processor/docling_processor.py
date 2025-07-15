@@ -83,7 +83,7 @@ class DoclingProcessor:
 
         try:
             with pymupdf.open(self.input_path) as doc:
-                result_json = {"content": [], "total_page": doc.page_count}
+                result_json = {"content": [], "total_pages": doc.page_count}
                 total_pages = doc.page_count
                 total_times = 0.0
 
@@ -200,17 +200,17 @@ class DoclingProcessor:
 
         settings.debug.profile_pipeline_timings = True
 
-        pipeline_options.ocr_options = EasyOcrOptions(
-            lang=["en", "id"],
-            force_full_page_ocr=force_ocr,
-            download_enabled=True,
-        )
-
-        # pipeline_options.ocr_options = TesseractCliOcrOptions(
-        #     lang=["eng", "ind"],
+        # pipeline_options.ocr_options = EasyOcrOptions(
+        #     lang=["en", "id"],
         #     force_full_page_ocr=force_ocr,
-        #     tesseract_cmd="tesseract",
+        #     download_enabled=True,
         # )
+
+        pipeline_options.ocr_options = TesseractCliOcrOptions(
+            lang=["eng", "ind"],
+            force_full_page_ocr=force_ocr,
+            tesseract_cmd="tesseract",
+        )
 
         converter = DocumentConverter(
             allowed_formats=[InputFormat.PDF],
