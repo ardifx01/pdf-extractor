@@ -1,6 +1,7 @@
 from pathlib import Path
 import json
 import gc
+import logging
 
 import whisper
 import pydub
@@ -19,6 +20,8 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import HumanMessage
 
 load_dotenv()
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 class WhisperProcessor:
     """
@@ -78,9 +81,12 @@ class WhisperProcessor:
             output_file = self.output_dir / f"{file_path.stem}.json"
 
             if not self.overwrite and check_json_file_exists(output_file):
+                logger.info(
+                    f"JSON result already exists at {output_file}. Skipping processing."
+                )
                 yield log_process(
-                    "info",
-                    f"[SKIP] JSON result already exists for {file_path.name}, skipping.",
+                    "skip",
+                    f"JSON result already exists for {file_path.name}. Skipping processing.",
                 )
                 return
             
