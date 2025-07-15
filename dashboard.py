@@ -28,14 +28,6 @@ from app.utils.helper import (
     read_dataset,
 )
 
-# Constants
-EXTENSION = {
-    "csv": [".csv"],
-    "xlsx": [".xlsx"],
-    "pdf": [".pdf"],
-    "wav": [".wav"],
-}
-
 # Fix torch path handling
 torch.classes.__path__ = []
 
@@ -200,7 +192,7 @@ def render_sidebar():
     tab1, tab2 = st.sidebar.tabs(["Upload Dataset", "Download PDF from URL"])
 
     with tab1:
-        allowed_extensions = [v for ext in EXTENSION.values() for v in ext]
+        allowed_extensions = [v for ext in TEMP_DIR_MAP.values() for v in ext]
         # Dataset handling
         dataset_files = st.file_uploader(
             "Upload Dataset (CSV/Excel/PDF/Video)",
@@ -585,138 +577,142 @@ def handle_pdf_processing(export_to_markdown, number_thread, overwrite):
                 file_status.info(f"Processing: {file_name}")
                 page_processing_slot_status = st.empty()
 
-                if method_option_select == "Docling":
-                    processor = DoclingProcessor(
-                        input_path=TEMP_DIR / "pdf" / file_name,
-                        create_markdown=export_to_markdown,
-                        overwrite=overwrite,
-                        exclude_object=exclude_object_value,
-                        number_threads=number_thread,
-                    )
 
-                    for log in processor.process_pdf():
-                        if log.get("status") == "skip":
-                            total_success += 1
-                            total_skipped += 1
-                            page_processing_slot_status.info(
-                                log.get("message", "Processing skipped.")
-                            )
-                        elif log.get("status") == "info":
-                            page_processing_slot_status.info(
-                                log.get("message", "Processing info.")
-                            )
-                        elif log.get("status") == "success":
-                            total_success += 1
-                            file_status.success(
-                                log.get("message", "Processing succeeded.")
-                            )
-                        elif log.get("status") == "error":
-                            total_failed += 1
-                            st.write(log.get("message", "Processing failed."))
-                        elif log.get("status") == "ocr_active":
-                            page_processing_slot_status.info(
-                                log.get("message", "OCR is active.")
-                            )
-                        else:
-                            st.write(log.get("message", "Processing failed."))
+                file_extension = Path(file_name).suffix.lower().split(".")[-1]
 
-                    status.update(
-                        label=f"Processing: {idx}/{total_files} Files | Success {total_success} | Skipped {total_skipped} | Failed {total_failed}"
-                    )
+                # PDF file but Whisper AI selected
+                if file_extension in TEMP_DIR_MAP.get("pdf", []):
+                    if method_option_select == "Whisper AI":
+                        file_status.error(
+                            f"File {file_name} is a PDF. Please select a PDF processing method (Docling, PyMuPDF + Tesseract, or Azure Doc Intelligence) instead of Whisper AI."
+                        )
+                        continue
+                    # PDF processing methods
+                    if method_option_select == "Docling":
+                        processor = DoclingProcessor(
+                            input_path=TEMP_DIR / "pdf" / file_name,
+                            create_markdown=export_to_markdown,
+                            overwrite=overwrite,
+                            exclude_object=exclude_object_value,
+                            number_threads=number_thread,
+                        )
+                        for log in processor.process_pdf():
+                            if log.get("status") == "skip":
+                                total_success += 1
+                                total_skipped += 1
+                                page_processing_slot_status.info(
+                                    log.get("message", "Processing skipped.")
+                                )
+                            elif log.get("status") == "info":
+                                page_processing_slot_status.info(
+                                    log.get("message", "Processing info.")
+                                )
+                            elif log.get("status") == "success":
+                                total_success += 1
+                                file_status.success(
+                                    log.get("message", "Processing succeeded.")
+                                )
+                            elif log.get("status") == "error":
+                                total_failed += 1
+                                st.write(log.get("message", "Processing failed."))
+                            elif log.get("status") == "ocr_active":
+                                page_processing_slot_status.info(
+                                    log.get("message", "OCR is active.")
+                                )
+                            else:
+                                st.write(log.get("message", "Processing failed."))
+                        status.update(
+                            label=f"Processing: {idx}/{total_files} Files | Success {total_success} | Skipped {total_skipped} | Failed {total_failed}"
+                        )
+                        st.session_state["process_file_clicked"] = False
+                        page_processing_slot_status.empty()
+                    elif method_option_select == "PyMuPDF + Tesseract":
+                        processor = PymuTesseractProcessor(
+                            input_path=TEMP_DIR / "pdf" / file_name,
+                            overwrite=overwrite,
+                        )
+                        for log in processor.process_pdf():
+                            if log.get("status") == "skip":
+                                total_success += 1
+                                total_skipped += 1
+                                page_processing_slot_status.info(
+                                    log.get("message", "Processing skipped.")
+                                )
+                            elif log.get("status") == "info":
+                                page_processing_slot_status.info(
+                                    log.get("message", "Processing info.")
+                                )
+                            elif log.get("status") == "success":
+                                total_success += 1
+                                file_status.success(
+                                    log.get("message", "Processing succeeded.")
+                                )
+                            elif log.get("status") == "error":
+                                total_failed += 1
+                                st.write(log.get("message", "Processing failed."))
+                            elif log.get("status") == "ocr_active":
+                                page_processing_slot_status.info(
+                                    log.get("message", "OCR is active.")
+                                )
+                            else:
+                                st.write(log.get("message", "Processing failed."))
+                        status.update(
+                            label=f"Processing: {idx}/{total_files} Files | Success {total_success} | Skipped {total_skipped} | Failed {total_failed}"
+                        )
+                        st.session_state["process_file_clicked"] = False
+                        page_processing_slot_status.empty()
+                    elif method_option_select == "Azure Doc Intelligence":
+                        processor = AzureAIProcessor(
+                            endpoint=os.environ.get(
+                                "AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT", ""
+                            ),
+                            key=os.environ.get("AZURE_DOCUMENT_INTELLIGENCE_KEY", ""),
+                        )
+                        for log in processor.transcribe_pdf(
+                            file=str(TEMP_DIR / "pdf" / file_name), overwrite=overwrite
+                        ):
+                            if log.get("status") == "skip":
+                                total_success += 1
+                                total_skipped += 1
+                                page_processing_slot_status.info(
+                                    log.get("message", "Processing skipped.")
+                                )
+                            elif log.get("status") == "info":
+                                page_processing_slot_status.info(
+                                    log.get("message", "Processing info.")
+                                )
+                            elif log.get("status") == "success":
+                                total_success += 1
+                                file_status.success(
+                                    log.get("message", "Processing succeeded.")
+                                )
+                            elif log.get("status") == "error":
+                                total_failed += 1
+                                st.write(log.get("message", "Processing failed."))
+                            else:
+                                st.write(log.get("message", "Processing failed."))
+                        status.update(
+                            label=f"Processing: {idx}/{total_files} Files | Success {total_success} | Skipped {total_skipped} | Failed {total_failed}"
+                        )
+                        st.session_state["process_file_clicked"] = False
+                        page_processing_slot_status.empty()
 
-                    st.session_state["process_file_clicked"] = False
-                    page_processing_slot_status.empty()
-
-                if method_option_select == "PyMuPDF + Tesseract":
-                    processor = PymuTesseractProcessor(
-                        input_path=TEMP_DIR / "pdf" / file_name,
-                        overwrite=overwrite,
-                    )
-                    for log in processor.process_pdf():
-                        if log.get("status") == "skip":
-                            total_success += 1
-                            total_skipped += 1
-                            page_processing_slot_status.info(
-                                log.get("message", "Processing skipped.")
-                            )
-                        elif log.get("status") == "info":
-                            page_processing_slot_status.info(
-                                log.get("message", "Processing info.")
-                            )
-                        elif log.get("status") == "success":
-                            total_success += 1
-                            file_status.success(
-                                log.get("message", "Processing succeeded.")
-                            )
-                        elif log.get("status") == "error":
-                            total_failed += 1
-                            st.write(log.get("message", "Processing failed."))
-                        elif log.get("status") == "ocr_active":
-                            page_processing_slot_status.info(
-                                log.get("message", "OCR is active.")
-                            )
-                        else:
-                            st.write(log.get("message", "Processing failed."))
-
-                    status.update(
-                        label=f"Processing: {idx}/{total_files} Files | Success {total_success} | Skipped {total_skipped} | Failed {total_failed}"
-                    )
-
-                    st.session_state["process_file_clicked"] = False
-                    page_processing_slot_status.empty()
-
-                # Need Attention: Penyesuaian untuk Azure Doc Intelligence
-                if method_option_select == "Azure Doc Intelligence":
-                    processor = AzureAIProcessor(
-                        endpoint=os.environ.get(
-                            "AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT", ""
-                        ),
-                        key=os.environ.get("AZURE_DOCUMENT_INTELLIGENCE_KEY", ""),
-                    )
-                    for log in processor.transcribe_pdf(
-                        file=str(TEMP_DIR / "pdf" / file_name), overwrite=overwrite
-                    ):
-                        if log.get("status") == "skip":
-                            total_success += 1
-                            total_skipped += 1
-                            page_processing_slot_status.info(
-                                log.get("message", "Processing skipped.")
-                            )
-                        elif log.get("status") == "info":
-                            page_processing_slot_status.info(
-                                log.get("message", "Processing info.")
-                            )
-                        elif log.get("status") == "success":
-                            total_success += 1
-                            file_status.success(
-                                log.get("message", "Processing succeeded.")
-                            )
-                        elif log.get("status") == "error":
-                            total_failed += 1
-                            st.write(log.get("message", "Processing failed."))
-                        else:
-                            st.write(log.get("message", "Processing failed."))
-
-                    status.update(
-                        label=f"Processing: {idx}/{total_files} Files | Success {total_success} | Skipped {total_skipped} | Failed {total_failed}"
-                    )
-
-                    st.session_state["process_file_clicked"] = False
-                    page_processing_slot_status.empty()
-
-                if method_option_select == "Whisper AI":
+                # Video/audio file but non-Whisper method selected
+                elif file_extension in TEMP_DIR_MAP.get("video", []) or file_extension in TEMP_DIR_MAP.get("audio", []):
+                    if method_option_select != "Whisper AI":
+                        file_status.error(
+                            f"File {file_name} is a video or audio file. Please select the Whisper AI method for audio/video processing."
+                        )
+                        continue
+                    # Whisper AI processing
                     processor = WhisperProcessor(language="id", overwrite=overwrite)
-
-                    category = TEMP_DIR_MAP.get("video", []) + TEMP_DIR_MAP.get(
-                        "audio", []
-                    )
+                    category = TEMP_DIR_MAP.get("video", []) + TEMP_DIR_MAP.get("audio", [])
                     extension = Path(file_name).suffix.lower()
                     if extension.split(".")[-1] not in category:
                         file_status.error(
                             f"File {file_name} is not a valid video or audio file."
                         )
                         continue
-
                     for log in processor.transcribe_audio(
                         file_path=TEMP_DIR / "video" / file_name,
                     ):
@@ -740,11 +736,9 @@ def handle_pdf_processing(export_to_markdown, number_thread, overwrite):
                             st.write(log.get("message", "Processing failed."))
                         else:
                             st.write(log.get("message", "Processing failed."))
-
                     status.update(
                         label=f"Processing: {idx}/{total_files} Videos | Success {total_success} | Skipped {total_skipped} | Failed {total_failed}"
                     )
-
                     st.session_state["process_file_clicked"] = False
                     page_processing_slot_status.empty()
 
@@ -752,13 +746,13 @@ def handle_pdf_processing(export_to_markdown, number_thread, overwrite):
                     "extracted_at": datetime.now().isoformat(),
                 }
 
-            file_status.empty()
+            # file_status.empty()
 
             if not st.session_state["cancel_processing"]:
                 status.success(
                     f"Files converted to {'Markdown and JSON' if export_to_markdown else 'JSON'} files. Total Success: {total_success}, Skipped {total_skipped}, Failed: {total_failed}"
                 )
-                st.rerun()
+                # st.rerun()
 
     return files
 
@@ -960,6 +954,7 @@ def render_preview_file(files, export_to_markdown):
                 if is_pdf and 0 <= page_number - 1 < len(content):
                     selected_page = content[page_number - 1]["content"]
                     dur_per_page = content[page_number - 1].get("duration", 0) or 0
+                    confidence = content[page_number - 1].get("confidence", 0) or 0
                     parse_score = content[page_number - 1].get("parse_score", 0) or 0
                     layout_score = content[page_number - 1].get("layout_score", 0) or 0
                     table_score = content[page_number - 1].get("table_score", 0) or 0
@@ -980,6 +975,7 @@ def render_preview_file(files, export_to_markdown):
                             f"""
                             - **Total Duration**: {total_duration:.2f} seconds
                             - **Time for Page {page_number}**: {dur_per_page:.2f} seconds
+                            - **Confidence**: {confidence:.4f}
                             - **Parse Score**: {parse_score:.4f}
                             - **Layout Score**: {layout_score:.4f}
                             - **Table Score**: {table_score:.4f}
