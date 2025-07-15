@@ -1,4 +1,4 @@
-# PDF Extractor using PyMuPDF + Tesseract and Docling
+# File Extraction and Video Transcription Tool
 
 PDF Extractor is a Python-based tool that extracts text from PDF files using PyMuPDF and Tesseract OCR. It is designed to handle both text-based and image-based PDFs, making it versatile for various use cases.
 
@@ -88,7 +88,7 @@ We test two methods to run this project, we can concluded:
         ```
 
 7. **Install ffmpeg** (for video processing)
-    - **Windows**: Download the latest release from [FFmpeg](https://ffmpeg.org/download.html) and add it to your PATH.
+    - **Windows**: Download the latest release from [FFmpeg](https://ffmpeg.org/download.html) and add it to your PATH variable.
     - **macOS**: Use Homebrew:
 
         ```bash
@@ -105,7 +105,11 @@ We test two methods to run this project, we can concluded:
     Start the Streamlit application:
 
     ```bash
-    streamlit run app\dashboard.py
+    streamlit run dashboard.py
     ```
 
 9. **Access the Web Interface**
+
+## Issues
+
+If you encounter any issues, please add them to the [issues page](https://github.com/Dzoel31/pdf-extractor/issues).

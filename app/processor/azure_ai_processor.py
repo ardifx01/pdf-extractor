@@ -229,15 +229,26 @@ class AzureAIProcessor:
 
     @staticmethod
     def compute_avg_confidence(page):
+        """ Compute the average confidence score for words in a page.
+        Args:
+            page (DocumentPage): The page object containing words.
+        Returns:
+            float: The average confidence score.
+        """
         all_confidences = [word.confidence for word in page.words]
         return round(sum(all_confidences) / len(all_confidences), 4) if all_confidences else 0.0
 
-    def transcribe_pdf(self, file: str, output_dir=None, temp_dir=None, overwrite=True):
-        output_dir = output_dir or self.output_dir
-        temp_dir = temp_dir or self.temp_pdf_dir
-
+    def transcribe_pdf(self, file: str, overwrite=True):
+        """ Transcribe a PDF file using Azure Document Intelligence.
+        
+        Args:
+            file (str): Path to the PDF file or URL.
+            overwrite (bool, optional): Whether to overwrite existing JSON files. Defaults to True.
+        Yields:
+            Generator of log messages indicating the progress and status of the transcription.
+        """
         file_name = Path(file).stem
-        output_folder = output_dir
+        output_folder = self.output_dir
         os.makedirs(output_folder, exist_ok=True)
         output_json_path = Path(output_folder) / f"{file_name}.json"
 
@@ -287,12 +298,12 @@ class AzureAIProcessor:
                 if page_number in pages_with_tables:
                     logger.info("\n Page contains a table, using Table conversion algorithm")
                     page_text = self.process_page_with_table(
-                        page_number, detected_tables, local_pdf_path, temp_dir
+                        page_number, detected_tables, local_pdf_path, self.temp_pdf_dir
                     )
                 else:
                     logger.info("\n Page does not contain a table, using Non-Table conversion algorithm")
                     page_text = self.process_page_without_table(
-                        page, local_pdf_path, temp_dir
+                        page, local_pdf_path, self.temp_pdf_dir
                     )
                 full_text = self.clean_text("\n".join(page_text))
                 avg_confidence = self.compute_avg_confidence(page)
