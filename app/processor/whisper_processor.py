@@ -23,6 +23,7 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
 class WhisperProcessor:
     """
     Initialize the WhisperProcessor with the specified model and parameters.
@@ -36,10 +37,12 @@ class WhisperProcessor:
         overwrite: bool = False,
     ):
         self.model_name = model_name
-        self.language = language
-        self.temperature = 0.0
-        self.condition_on_previous_text = False
-        self.no_speech_threshold = 0.9
+        self.params = {
+            "language": language,
+            "temperature": 0.0,
+            "condition_on_previous_text": False,
+            "no_speech_threshold": 0.9,
+        }
         self.overwrite = overwrite
         self.output_dir = OUTPUT_DIR / "whisper"
         if device == "auto":
@@ -57,9 +60,19 @@ class WhisperProcessor:
         sample_rate: int = 16000,
         channels: int = 1,
     ) -> str:
-        """Preprocess audio file to the specified format and sample rate."""
+        """Preprocess audio file to the specified format and sample rate.
+
+        Args:
+            file_path (str | Path): Path to the audio file.
+            format (str): Desired audio format (default: "wav").
+            sample_rate (int): Desired sample rate (default: 16000).
+            channels (int): Number of audio channels (default: 1).
+        Returns:
+            str: Path to the preprocessed audio file.
+        """
         ensure_temp_dir(TEMP_DIR / format)
-        audio = pydub.AudioSegment.from_file(file_path, format=format)
+        input_format = Path(file_path).suffix.lower().split(".")[-1]
+        audio = pydub.AudioSegment.from_file(file_path, format=input_format)
         audio = audio.set_frame_rate(sample_rate).set_channels(channels)
         temp_file_path = TEMP_DIR / format / f"temp_audio.{format}"
         audio.export(temp_file_path, format=format)
@@ -89,27 +102,27 @@ class WhisperProcessor:
                     f"JSON result already exists for {file_path.name}. Skipping processing.",
                 )
                 return
-            
-            yield log_process(
-                "info", f"Processing audio file: {file_path.name}"
-            )
+
+            yield log_process("info", f"Processing audio file: {file_path.name}")
             processed_audio = self._preprocess_audio(file_path)
 
-            yield log_process(
-                "info", f"Transcribing audio file: {file_path.name}"
-            )
+            yield log_process("info", f"Transcribing audio file: {file_path.name}")
 
-            transcription = self.model.transcribe(processed_audio)
+            transcription = self.model.transcribe(
+                processed_audio, **self.params, verbose=True
+            )
             segments = transcription.get("segments", [])
 
-            chunked_result = self._group_result(segments, chunk_length=60, chunk_unit="minutes")
+            chunked_result = self._group_result(
+                segments, chunk_length=60, chunk_unit="minutes"
+            )
 
             yield log_process(
                 "info", f"Post-processing transcription for {file_path.name}"
             )
             # Post-process the transcribed text
             for segment in chunked_result["content"]:
-                segment["content"] = self._text_postprocess(segment["content"]) 
+                segment["content"] = self._text_postprocess(segment["content"])
 
             with open(output_file, "w+", encoding="utf-8") as f:
                 json.dump(chunked_result, f, ensure_ascii=False, indent=4)
@@ -120,11 +133,13 @@ class WhisperProcessor:
 
         except StopIteration:
             raise ValueError(f"Unsupported file type for {file_path.name}")
-        
+
         except FileNotFoundError:
             raise FileNotFoundError(f"Input file {file_path} does not exist.")
-    
-    def _group_result(self, segments, chunk_length: int = 60, chunk_unit: str = "seconds"):
+
+    def _group_result(
+        self, segments, chunk_length: int = 60, chunk_unit: str = "seconds"
+    ):
         """
         Group transcription segments by time.
 
@@ -166,12 +181,14 @@ class WhisperProcessor:
                 if seg_start >= start and seg_end <= end:
                     texts.append(segment["text"].strip())
             if texts:
-                result_json["content"].append({
-                    "segment": len(result_json["content"]),
-                    "start_time": start,
-                    "end_time": end,
-                    "content": " ".join(texts)
-                })
+                result_json["content"].append(
+                    {
+                        "segment": len(result_json["content"]),
+                        "start_time": start,
+                        "end_time": end,
+                        "content": " ".join(texts),
+                    }
+                )
                 result_json["total_segments"] += 1
             start = end
         return result_json

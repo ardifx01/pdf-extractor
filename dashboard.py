@@ -485,7 +485,8 @@ def handle_download_pdfs(file_path, df, id_col, url_col):
 
 
 def handle_pdf_processing(export_to_markdown, number_thread, overwrite):
-    ensure_temp_dir(TEMP_DIR / "pdf")
+    for subdir in ["pdf", "video", "audio"]:
+        ensure_temp_dir(TEMP_DIR / subdir)
     pdf_files = os.listdir(TEMP_DIR / "pdf")
     audio_files = os.listdir(TEMP_DIR / "video") + os.listdir(TEMP_DIR / "audio")
 
