@@ -3,7 +3,7 @@ import random
 import re
 from pathlib import Path
 import time
-from typing import Any, Generator, Union, List
+from typing import Any, Generator, Optional, Union, List
 from urllib.parse import urlparse
 
 import requests
@@ -11,6 +11,7 @@ import pandas as pd
 import json
 import pymupdf
 import logging
+import csv
 
 from app.config import TEMP_DIR, TEMP_DIR_MAP
 
@@ -68,6 +69,34 @@ def check_json_file_exists(file_path: Union[str, Path]) -> bool:
             return False
     return False
 
+def read_dataset(file_path: Union[str, Path]) -> pd.DataFrame:
+    """
+    Reads a dataset from a file and returns it as a DataFrame.
+
+    Args:
+        file_path (str | Path): The path to the dataset file.
+
+    Returns:
+        pd.DataFrame: The dataset as a DataFrame.
+    """
+    file_path = Path(file_path)
+    if file_path.suffix == ".csv":
+        # Try to detect delimiter automatically using csv.Sniffer
+        with open(file_path, "r", encoding="utf-8") as f:
+            sample = f.read(4096)
+            if sample:
+                try:
+                    delimiter = csv.Sniffer().sniff(sample).delimiter
+                except Exception:
+                    delimiter = ","
+            else:
+                delimiter = ","
+        return pd.read_csv(file_path, sep=delimiter)
+    elif file_path.suffix in [".xlsx", ".xls"]:
+        return pd.read_excel(file_path)
+    else:
+        raise ValueError("Unsupported file type for dataset.")
+
 
 class Downloader:
     """
@@ -79,7 +108,7 @@ class Downloader:
         timeout (int): The timeout for the download request.
         stream (bool): Whether to stream the download.
     """
-    def __init__(self, url: str, url_column: str, timeout: int = 10, stream: bool = True):
+    def __init__(self, url: str | pd.DataFrame, url_column: Optional[str] = None, url_id: Optional[str] = None, timeout: int = 10, stream: bool = True):
         self.timeout = timeout
         self.stream = stream
 
@@ -99,6 +128,14 @@ class Downloader:
             self.urls = self.df[url_column].tolist()
         elif isinstance(url, str):  # If it's a single URL
             self.urls = [url]
+
+        elif isinstance(url, pd.DataFrame):  # If it's a DataFrame
+            if url_column not in url.columns:
+                raise ValueError(f"Column '{url_column}' not found in the DataFrame.")
+            self.urls = url[url_column].tolist()
+        else:
+            raise ValueError("The 'url' parameter must be a string or a DataFrame.")
+        self.url_id = url_id
         self.session = requests.Session()
         self.session.headers.update(
             {
@@ -139,6 +176,10 @@ class Downloader:
                         self.url, timeout=self.timeout, stream=self.stream
                     )
                     response.raise_for_status()  # Raise an error for bad responses
+
+                    if self.url_id: # overwrite filename with url_id
+                        self.filename = f"{self.url_id}"
+
                     with open(self.dirpath / self.filename, "wb") as f:
                         for chunk in response.iter_content(chunk_size=8192):
                             f.write(chunk)
