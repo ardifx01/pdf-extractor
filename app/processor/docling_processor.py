@@ -169,7 +169,7 @@ class DoclingProcessor:
             raise e
 
     def _extract_text(
-        self, force_ocr: bool = False
+        self, force_ocr: bool = False,
     ) -> tuple[str, float, dict[str, Any]]:
         """Extract text from the PDF document."""
         accelerator_options = AcceleratorOptions(
@@ -203,6 +203,7 @@ class DoclingProcessor:
         converter_result = converter.convert(self.input_path)
         text = converter_result.document.export_to_markdown(escape_underscores=False)
         conversion_time = round(converter_result.timings["pipeline_total"].times[0], 2)
+        print(f"Conversion time: {conversion_time} seconds")
 
         confidence = converter_result.confidence.model_dump()
 
@@ -213,9 +214,15 @@ class DoclingProcessor:
             return self._extract_text(force_ocr=True)
 
         if self.create_markdown:
-            markdown_path = self.output_dir / f"{self.input_path.stem}.md"
+            markdown_path = self.output_dir / self.input_path.stem / f"{self.input_path.stem}.md"
             with open(markdown_path, "w+", encoding="utf-8") as f:
                 f.write(text)
             logger.info(f"Markdown file created at {markdown_path}")
 
         return text, conversion_time, confidence
+
+
+if __name__ == "__main__":
+    processor = DoclingProcessor("sample-layout.pdf", overwrite=True, create_markdown=True)
+    for result in processor.process_pdf():
+        print(result)
