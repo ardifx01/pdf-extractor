@@ -71,7 +71,7 @@ class WhisperProcessor:
             str: Path to the preprocessed audio file.
         """
         ensure_temp_dir(TEMP_DIR / format)
-        input_format = Path(file_path).suffix.lower().split(".")[-1]
+        input_format = Path(file_path).suffix[1:].lower()
         audio = pydub.AudioSegment.from_file(file_path, format=input_format)
         audio = audio.set_frame_rate(sample_rate).set_channels(channels)
         temp_file_path = TEMP_DIR / format / f"temp_audio.{format}"
