@@ -14,47 +14,24 @@ import pyperclip
 from datetime import datetime, timedelta
 import atexit
 
-from pdf_process import (
-    handle_pdf_download_from_dataset,
-    read_dataset,
+from app.config import TEMP_DIR, OUTPUT_DIR, TEMP_DIR_MAP
+from app.processor.pymu_tesseract_processor import PymuTesseractProcessor
+from app.processor.docling_processor import DoclingProcessor
+from app.processor.azure_ai_processor import AzureAIProcessor
+from app.processor.whisper_processor import WhisperProcessor
+
+from app.utils.helper import (
+    Downloader,
     ensure_temp_dir,
-    clear_temp_dir,
-    download_pdf,
-    TEMP_DIR,
-    TEMP_DIR_PDF,
+    check_json_file_exists,
+    read_dataset,
 )
-from export_results import (
-    process_pdf,
-    OUTPUT_DIR,
-)
-
-from Pymu_Tesseract_Finetuned import (
-    process_pdf_pymu_tesseract,
-    FOLDER_OUTPUT_PYMU_TESSERACT,
-)
-
-from Doc_Intelligent import (
-    transcribe_pdf_with_azureDocIntelligent
-)
-
-from transcribe_audio import (
-    VIDEO_PATH,
-    transcribe_audio,
-)
-
-# Constants
-EXTENSION = {
-    "csv": [".csv"],
-    "xlsx": [".xlsx"],
-    "pdf": [".pdf"],
-    "wav": [".wav"],
-}
 
 # Fix torch path handling
 torch.classes.__path__ = []
 
 
-DATA_TEMP = Path("app/temp/data")
+DATA_TEMP = TEMP_DIR / "data"
 os.makedirs(DATA_TEMP, exist_ok=True)
 
 
@@ -80,6 +57,8 @@ def init_session_state():
         st.session_state["method_option"] = None
     if "file_uploader_key" not in st.session_state:
         st.session_state["file_uploader_key"] = str(uuid.uuid4())
+    if "url_uploader_key" not in st.session_state:
+        st.session_state["url_uploader_key"] = str(uuid.uuid4())
     if "temp_file_path" not in st.session_state:
         st.session_state["temp_file_path"] = None
     if "already_copied" not in st.session_state:
@@ -99,7 +78,7 @@ def setup_page():
 # Utility functions
 def zip_for_download(progress_callback=None):
     target_folder = OUTPUT_DIR
-    base_name = "exported_results"
+    base_name = f"exported_results_{int(time.time())}"
 
     # Show progress
     if progress_callback:
@@ -133,8 +112,8 @@ def prepare_export():
 
     time.sleep(0.5)  # Small delay simulation
     update_progress(0.9)
-    clear_temp_dir(OUTPUT_DIR)
-    clear_temp_dir(TEMP_DIR)
+    shutil.rmtree(OUTPUT_DIR)
+    shutil.rmtree(TEMP_DIR)
 
     update_progress(1.0)
     time.sleep(0.5)
@@ -148,13 +127,13 @@ def has_extracted_data(output_dir: str | Path, export_to_markdown: bool):
         return False
 
     if st.session_state["method_option"] == "Docling":
-        output_dir = os.path.join(output_dir, "docling_results")
+        output_dir = OUTPUT_DIR / "docling"
     elif st.session_state["method_option"] == "PyMuPDF + Tesseract":
-        output_dir = FOLDER_OUTPUT_PYMU_TESSERACT
+        output_dir = OUTPUT_DIR / "pymu_tesseract"
     elif st.session_state["method_option"] == "Azure Doc Intelligence":
-        output_dir = os.path.join(output_dir, "doc_intelligent")
+        output_dir = OUTPUT_DIR / "azure_document_intelligence"
     elif st.session_state["method_option"] == "Whisper AI":
-        output_dir = OUTPUT_DIR / "transcribed_audio"
+        output_dir = OUTPUT_DIR / "whisper"
 
     if export_to_markdown:
         # Use glob for efficient file matching
@@ -214,10 +193,11 @@ def render_sidebar():
     tab1, tab2 = st.sidebar.tabs(["Upload Dataset", "Download PDF from URL"])
 
     with tab1:
+        allowed_extensions = [v for ext in TEMP_DIR_MAP.values() for v in ext]
         # Dataset handling
         dataset_files = st.file_uploader(
             "Upload Dataset (CSV/Excel/PDF/Video)",
-            type=["csv", "xlsx", "pdf", "mp4", "avi", "mov", "mkv"],
+            type=allowed_extensions,
             accept_multiple_files=True,
             key=st.session_state["file_uploader_key"],
             on_change=toast_upload_success,
@@ -227,12 +207,12 @@ def render_sidebar():
         url_pdf_file = st.text_input(
             "Download PDF from URL",
             placeholder="Enter PDF URL here",
-            key="pdf_url_input",
             help="Enter a valid URL to download a PDF file.",
+            key=st.session_state["url_uploader_key"],
         )
 
         if url_pdf_file:
-            results = download_pdf(url=url_pdf_file)
+            results = Downloader(url_pdf_file).download()
 
             for result in results:
                 if result.get("status") == "success":
@@ -240,6 +220,10 @@ def render_sidebar():
                         result.get("message", "PDF downloaded successfully."),
                         icon=":material/done_outline:",
                     )
+                    st.session_state["url_uploader_key"] = str(
+                        uuid.uuid4()
+                    )  # Reset input
+                    st.rerun()
 
     df = None
     column_list = []
@@ -248,11 +232,18 @@ def render_sidebar():
 
     if dataset_files:
         for dataset_file in dataset_files:
-            if re.search(r"\.(csv|xlsx)$", dataset_file.name, re.IGNORECASE):
-                temp_file_path = DATA_TEMP / dataset_file.name
-                with open(temp_file_path, "wb") as f:
-                    f.write(dataset_file.getbuffer())
+            category = next(
+                key
+                for key, value in TEMP_DIR_MAP.items()
+                if Path(dataset_file.name).suffix.split(".")[-1].lower() in value
+            )
 
+            ensure_temp_dir(TEMP_DIR / category)
+            temp_file_path = TEMP_DIR / category / dataset_file.name
+            with open(temp_file_path, "wb") as f:
+                f.write(dataset_file.getbuffer())
+
+            if re.search(r"\.(csv|xlsx)$", category, re.IGNORECASE):
                 df = read_dataset(temp_file_path)
                 column_list = df.columns.tolist()
 
@@ -260,25 +251,12 @@ def render_sidebar():
                     "extracted_at": datetime.now().isoformat(),
                 }
 
-            elif dataset_file.name.endswith(".pdf"):
-                # Save directly to TEMP_DIR_PDF
-                ensure_temp_dir(TEMP_DIR_PDF)
-                temp_file_path = TEMP_DIR_PDF / dataset_file.name
-                with open(temp_file_path, "wb") as f:
-                    f.write(dataset_file.getbuffer())
-            
-            elif dataset_file.name.endswith((".mp4", ".avi", ".mov", ".mkv")):
-                # Save directly to VIDEO_PATH
-                ensure_temp_dir(VIDEO_PATH)
-                temp_file_path = VIDEO_PATH / dataset_file.name
-                with open(temp_file_path, "wb") as f:
-                    f.write(dataset_file.getbuffer())
         st.session_state["file_uploader_key"] = str(uuid.uuid4())
         st.rerun()
 
     # Combined sidebar for existing dataset and PDF files
     existing_files = list(DATA_TEMP.glob("*.csv")) + list(DATA_TEMP.glob("*.xlsx"))
-    existing_pdfs = list(TEMP_DIR_PDF.glob("*.pdf"))
+    existing_pdfs = list((TEMP_DIR / "pdf").glob("*.pdf"))
 
     if existing_files or existing_pdfs:
         if existing_files:
@@ -354,14 +332,15 @@ def render_sidebar():
         )
         if clear_temp_button:
             st.session_state["file_uploader_key"] = str(uuid.uuid4())
-            clear_temp_dir(TEMP_DIR)
-            clear_temp_dir(OUTPUT_DIR)
+            shutil.rmtree(TEMP_DIR, ignore_errors=True)
+            shutil.rmtree(OUTPUT_DIR, ignore_errors=True)
             st.toast("Temporary files cleared successfully.")
             st.rerun()
 
     # Export button
-    ensure_temp_dir(OUTPUT_DIR / "docling_results")
-    ensure_temp_dir(VIDEO_PATH)
+    ensure_temp_dir(OUTPUT_DIR / "docling")
+    ensure_temp_dir(TEMP_DIR / "video")
+    ensure_temp_dir(TEMP_DIR / "audio")
     export_disabled = has_extracted_data(OUTPUT_DIR, export_to_markdown)
     export_btn = st.sidebar.button(
         label="Export",
@@ -436,7 +415,8 @@ def confirmation_delete():
             st.session_state["cancelled_export"] = True
             st.rerun()
 
-def handle_download_pdfs(file_path, df, id_col, url_col, use_specific_id):
+
+def handle_download_pdfs(file_path, df, id_col, url_col):
     if df is not None and id_col != url_col:
         total_pdf_files = df[url_col].nunique()
         total_processing = 0
@@ -444,9 +424,9 @@ def handle_download_pdfs(file_path, df, id_col, url_col, use_specific_id):
         failed_files = []
 
         with st.status("Downloading PDFs...", expanded=True) as status:
-            results = handle_pdf_download_from_dataset(
-                file_path, id_col, url_col, use_specific_id
-            )
+            results = Downloader(
+                df, url_column=url_col, url_id=id_col
+            ).download()
             download_slot = st.empty()
 
             for result in results:
@@ -478,9 +458,11 @@ def handle_download_pdfs(file_path, df, id_col, url_col, use_specific_id):
                         retry_df = df[(df[id_col] == row_id) & (df[url_col] == url)]
 
                         if not retry_df.empty:
-                            retry_result = handle_pdf_download_from_dataset(
-                                retry_df, id_col, url_col
-                            )
+                            retry_result = Downloader(
+                                url=retry_df,
+                                url_column=url_col,
+                                url_id=row_id,
+                            ).download()
 
                             for r in retry_result:
                                 if r.get("status") in ["success", "info"]:
@@ -508,10 +490,11 @@ def handle_download_pdfs(file_path, df, id_col, url_col, use_specific_id):
 
 
 def handle_pdf_processing(export_to_markdown, number_thread, overwrite):
-    ensure_temp_dir(TEMP_DIR_PDF)
-    pdf_files = os.listdir(TEMP_DIR_PDF)
-    audio_files = os.listdir(VIDEO_PATH)
-    
+    for subdir in ["pdf", "video", "audio"]:
+        ensure_temp_dir(TEMP_DIR / subdir)
+    pdf_files = os.listdir(TEMP_DIR / "pdf")
+    audio_files = os.listdir(TEMP_DIR / "video") + os.listdir(TEMP_DIR / "audio")
+
     # Combine PDF and audio files for processing
     files = pdf_files + audio_files
 
@@ -535,10 +518,10 @@ def handle_pdf_processing(export_to_markdown, number_thread, overwrite):
 
     ensure_temp_dir(
         [
-            OUTPUT_DIR / "docling_results",
-            FOLDER_OUTPUT_PYMU_TESSERACT,
-            OUTPUT_DIR / "doc_intelligent",
-            OUTPUT_DIR / "transcribed_audio",
+            OUTPUT_DIR / "docling",
+            OUTPUT_DIR / "pymu_tesseract",
+            OUTPUT_DIR / "azure_document_intelligence",
+            OUTPUT_DIR / "whisper",
         ]
     )
 
@@ -560,6 +543,16 @@ def handle_pdf_processing(export_to_markdown, number_thread, overwrite):
         "Object Detection",
         value=True,
         help="Use object detection during processing.",
+    )
+
+    ocr_engine = st.radio(
+        "OCR Engine (Docling)",
+        options=["easyocr", "tesseract"],
+        captions=["Accurate", "Fast"],
+        index=0,
+        key="ocr_engine",
+        help="Select the OCR engine to use for text extraction with Docling.",
+        horizontal=True,
     )
 
     if process_file_btn:
@@ -600,24 +593,155 @@ def handle_pdf_processing(export_to_markdown, number_thread, overwrite):
                 file_status.info(f"Processing: {file_name}")
                 page_processing_slot_status = st.empty()
 
-                if method_option_select == "Docling":
-                    output_dir = OUTPUT_DIR / "docling_results"
 
-                    for log in process_pdf(
-                        os.path.join(TEMP_DIR_PDF, file_name),
-                        create_markdown=export_to_markdown,
-                        overwrite=overwrite,
-                        exclude_object=exclude_object_value,
-                        number_thread=number_thread,
-                        output_dir=output_dir,
-                    ):
-                        if log.get("status") == "info":
-                            msg = log.get("message", "SKIP")
-                            if "[SKIP]" in msg:
+                file_extension = Path(file_name).suffix.lower().split(".")[-1]
+
+                # PDF file but Whisper AI selected
+                if file_extension in TEMP_DIR_MAP.get("pdf", []):
+                    if method_option_select == "Whisper AI":
+                        file_status.error(
+                            f"File {file_name} is a PDF. Please select a PDF processing method (Docling, PyMuPDF + Tesseract, or Azure Doc Intelligence) instead of Whisper AI."
+                        )
+                        continue
+                    # PDF processing methods
+                    if method_option_select == "Docling":
+                        processor = DoclingProcessor(
+                            input_path=TEMP_DIR / "pdf" / file_name,
+                            create_markdown=export_to_markdown,
+                            overwrite=overwrite,
+                            exclude_object=exclude_object_value,
+                            number_threads=number_thread,
+                            ocr_engine=ocr_engine,
+                        )
+                        for log in processor.process_pdf():
+                            if log.get("status") == "skip":
                                 total_success += 1
                                 total_skipped += 1
+                                page_processing_slot_status.info(
+                                    log.get("message", "Processing skipped.")
+                                )
+                            elif log.get("status") == "info":
+                                page_processing_slot_status.info(
+                                    log.get("message", "Processing info.")
+                                )
+                            elif log.get("status") == "success":
+                                total_success += 1
+                                file_status.success(
+                                    log.get("message", "Processing succeeded.")
+                                )
+                            elif log.get("status") == "error":
+                                total_failed += 1
+                                st.write(log.get("message", "Processing failed."))
+                            elif log.get("status") == "ocr_active":
+                                page_processing_slot_status.info(
+                                    log.get("message", "OCR is active.")
+                                )
+                            else:
+                                st.write(log.get("message", "Processing failed."))
+                        status.update(
+                            label=f"Processing: {idx}/{total_files} Files | Success {total_success} | Skipped {total_skipped} | Failed {total_failed}"
+                        )
+                        st.session_state["process_file_clicked"] = False
+                        page_processing_slot_status.empty()
+                    elif method_option_select == "PyMuPDF + Tesseract":
+                        processor = PymuTesseractProcessor(
+                            input_path=TEMP_DIR / "pdf" / file_name,
+                            overwrite=overwrite,
+                        )
+                        for log in processor.process_pdf():
+                            if log.get("status") == "skip":
+                                total_success += 1
+                                total_skipped += 1
+                                page_processing_slot_status.info(
+                                    log.get("message", "Processing skipped.")
+                                )
+                            elif log.get("status") == "info":
+                                page_processing_slot_status.info(
+                                    log.get("message", "Processing info.")
+                                )
+                            elif log.get("status") == "success":
+                                total_success += 1
+                                file_status.success(
+                                    log.get("message", "Processing succeeded.")
+                                )
+                            elif log.get("status") == "error":
+                                total_failed += 1
+                                st.write(log.get("message", "Processing failed."))
+                            elif log.get("status") == "ocr_active":
+                                page_processing_slot_status.info(
+                                    log.get("message", "OCR is active.")
+                                )
+                            else:
+                                st.write(log.get("message", "Processing failed."))
+                        status.update(
+                            label=f"Processing: {idx}/{total_files} Files | Success {total_success} | Skipped {total_skipped} | Failed {total_failed}"
+                        )
+                        st.session_state["process_file_clicked"] = False
+                        page_processing_slot_status.empty()
+                    elif method_option_select == "Azure Doc Intelligence":
+                        processor = AzureAIProcessor(
+                            endpoint=os.environ.get(
+                                "AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT", ""
+                            ),
+                            key=os.environ.get("AZURE_DOCUMENT_INTELLIGENCE_KEY", ""),
+                        )
+                        for log in processor.transcribe_pdf(
+                            file=str(TEMP_DIR / "pdf" / file_name), overwrite=overwrite
+                        ):
+                            if log.get("status") == "skip":
+                                total_success += 1
+                                total_skipped += 1
+                                page_processing_slot_status.info(
+                                    log.get("message", "Processing skipped.")
+                                )
+                            elif log.get("status") == "info":
+                                page_processing_slot_status.info(
+                                    log.get("message", "Processing info.")
+                                )
+                            elif log.get("status") == "success":
+                                total_success += 1
+                                file_status.success(
+                                    log.get("message", "Processing succeeded.")
+                                )
+                            elif log.get("status") == "error":
+                                total_failed += 1
+                                st.write(log.get("message", "Processing failed."))
+                            else:
+                                st.write(log.get("message", "Processing failed."))
+                        status.update(
+                            label=f"Processing: {idx}/{total_files} Files | Success {total_success} | Skipped {total_skipped} | Failed {total_failed}"
+                        )
+                        st.session_state["process_file_clicked"] = False
+                        page_processing_slot_status.empty()
+
+                # Video/audio file but non-Whisper method selected
+                elif file_extension in TEMP_DIR_MAP.get("video", []) or file_extension in TEMP_DIR_MAP.get("audio", []):
+                    if method_option_select != "Whisper AI":
+                        file_status.error(
+                            f"File {file_name} is a video or audio file. Please select the Whisper AI method for audio/video processing."
+                        )
+                        continue
+                    # Whisper AI processing
+                    processor = WhisperProcessor(language="id", overwrite=overwrite)
+                    category = TEMP_DIR_MAP.get("video", []) + TEMP_DIR_MAP.get("audio", [])
+                    extension = Path(file_name).suffix.lower()
+                    if extension.split(".")[-1] not in category:
+                        file_status.error(
+                            f"File {file_name} is not a valid video or audio file."
+                        )
+                        continue
+                    for log in processor.transcribe_audio(
+                        file_path=TEMP_DIR / "video" / file_name,
+                    ):
+                        if log.get("status") == "skip":
+                            total_success += 1
+                            total_skipped += 1
                             page_processing_slot_status.info(
                                 log.get("message", "Processing skipped.")
+                            )
+                        elif log.get("status") == "info":
+                            page_processing_slot_status.info(
+                                log.get("message", "Processing info.")
                             )
                         elif log.get("status") == "success":
                             total_success += 1
@@ -627,116 +751,11 @@ def handle_pdf_processing(export_to_markdown, number_thread, overwrite):
                         elif log.get("status") == "error":
                             total_failed += 1
                             st.write(log.get("message", "Processing failed."))
-                        elif log.get("status") == "ocr_active":
-                            page_processing_slot_status.info(
-                                log.get("message", "OCR is active.")
-                            )
                         else:
                             st.write(log.get("message", "Processing failed."))
-
-                    status.update(
-                        label=f"Processing: {idx}/{total_files} Files | Success {total_success} | Skipped {total_skipped} | Failed {total_failed}"
-                    )
-
-                    st.session_state["process_file_clicked"] = False
-                    page_processing_slot_status.empty()
-
-                if method_option_select == "PyMuPDF + Tesseract":
-                    for log in process_pdf_pymu_tesseract(
-                        os.path.join(TEMP_DIR_PDF, file_name),
-                        folder_output_path=FOLDER_OUTPUT_PYMU_TESSERACT,
-                        overwrite=overwrite,
-                    ):
-                        if log.get("status") == "info":
-                            msg = log.get("message", "SKIP")
-                            if "[SKIP]" in msg:
-                                total_success += 1
-                                total_skipped += 1
-                            page_processing_slot_status.info(
-                                log.get("message", "Processing skipped.")
-                            )
-                        elif log.get("status") == "success":
-                            total_success += 1
-                            file_status.success(
-                                log.get("message", "Processing succeeded.")
-                            )
-                        elif log.get("status") == "error":
-                            total_failed += 1
-                            st.write(log.get("message", "Processing failed."))
-                        elif log.get("status") == "ocr_active":
-                            page_processing_slot_status.info(
-                                log.get("message", "OCR is active.")
-                            )
-                        else:
-                            st.write(log.get("message", "Processing failed."))
-
-                    status.update(
-                        label=f"Processing: {idx}/{total_files} Files | Success {total_success} | Skipped {total_skipped} | Failed {total_failed}"
-                    )
-
-                    st.session_state["process_file_clicked"] = False
-                    page_processing_slot_status.empty()
-
-                # Need Attention: Penyesuaian untuk Azure Doc Intelligence
-                if method_option_select == "Azure Doc Intelligence":
-                    for log in transcribe_pdf_with_azureDocIntelligent(
-                        os.path.join(TEMP_DIR_PDF, file_name),
-                        overwrite=overwrite,
-                    ):
-                        if log.get("status") == "info":
-                            msg = log.get("message", "SKIP")
-                            if "[SKIP]" in msg:
-                                total_success += 1
-                                total_skipped += 1
-                            page_processing_slot_status.info(
-                                log.get("message", "Processing skipped.")
-                            )
-                        elif log.get("status") == "success":
-                            total_success += 1
-                            file_status.success(
-                                log.get("message", "Processing succeeded.")
-                            )
-                        elif log.get("status") == "error":
-                            total_failed += 1
-                            st.write(log.get("message", "Processing failed."))
-                        else:
-                            st.write(log.get("message", "Processing failed."))
-
-                    status.update(
-                        label=f"Processing: {idx}/{total_files} Files | Success {total_success} | Skipped {total_skipped} | Failed {total_failed}"
-                    )
-
-                    st.session_state["process_file_clicked"] = False
-                    page_processing_slot_status.empty()
-
-                if method_option_select == "Whisper AI":
-                    for log in transcribe_audio(
-                        os.path.join(VIDEO_PATH, file_name),
-                        overwrite=overwrite,
-                    ):
-                        if log.get("status") == "info":
-                            msg = log.get("message", "SKIP")
-                            if "[SKIP]" in msg:
-                                total_success += 1
-                                total_skipped += 1
-                            page_processing_slot_status.info(
-                                log.get("message", "Processing skipped.")
-                            )
-                        elif log.get("status") == "success":
-                            total_success += 1
-                            file_status.success(
-                                log.get("message", "Processing succeeded.")
-                            )
-                        elif log.get("status") == "error":
-                            total_failed += 1
-                            st.write(log.get("message", "Processing failed."))
-                        else:
-                            st.write(log.get("message", "Processing failed."))
-
                     status.update(
                         label=f"Processing: {idx}/{total_files} Videos | Success {total_success} | Skipped {total_skipped} | Failed {total_failed}"
                     )
-
                     st.session_state["process_file_clicked"] = False
                     page_processing_slot_status.empty()
 
@@ -788,15 +807,15 @@ def clean_old_files(max_age_minutes=30):
         # Delete expired files
         if age > timedelta(minutes=max_age_minutes):
             try:
-                if os.path.exists(os.path.join(TEMP_DIR_PDF, file_path)):
-                    os.remove(os.path.join(TEMP_DIR_PDF, file_path))
+                if os.path.exists(TEMP_DIR / "pdf" / file_path):
+                    os.remove(TEMP_DIR / "pdf" / file_path)
                     st.toast(
                         f"🧹 {file_path.name} has been automatically deleted", icon="✅"
                     )
                     expired_files.append(file_path_str)
 
-                if os.path.exists(os.path.join(DATA_TEMP, file_path)):
-                    os.remove(os.path.join(DATA_TEMP, file_path))
+                if os.path.exists(DATA_TEMP / file_path):
+                    os.remove(DATA_TEMP / file_path)
                     st.toast(
                         f"🧹 {file_path.name} has been automatically deleted", icon="✅"
                     )
@@ -843,7 +862,7 @@ def render_preview_file(files, export_to_markdown):
 
     # Determine file type and set up preview logic
     if file_ext == ".pdf":
-        file_path = TEMP_DIR_PDF / query_file
+        file_path = TEMP_DIR / "pdf" / query_file
         try:
             doc = pymupdf.open(file_path)
         except Exception:
@@ -855,13 +874,24 @@ def render_preview_file(files, export_to_markdown):
         max_page = doc.page_count
         is_pdf = True
         is_video = False
-    elif file_ext in [".mp4", ".avi", ".mov", ".mkv"]:
-        file_path = VIDEO_PATH / query_file
+        is_audio = False
+
+    elif file_ext.split(".")[-1] in TEMP_DIR_MAP.get("video", []):
+        file_path = TEMP_DIR / "video" / query_file
         doc = None
         # For videos, you might want to use a video player component
         max_page = 1
         is_pdf = False
         is_video = True
+        is_audio = False
+
+    elif file_ext.split(".")[-1] in TEMP_DIR_MAP.get("audio", []):
+        file_path = TEMP_DIR / "audio" / query_file
+        doc = None
+        max_page = 1
+        is_pdf = False
+        is_video = False
+        is_audio = True
     else:
         st.error("Unsupported file type for preview.")
         return
@@ -875,6 +905,7 @@ def render_preview_file(files, export_to_markdown):
         step=1,
         key="page_number",
     )
+
     st.write(f"{'Page' if is_pdf else 'Video'} {page_number} of {max_page}")
 
     preview, result = st.columns(2, border=True)
@@ -892,6 +923,9 @@ def render_preview_file(files, export_to_markdown):
         elif is_video:
             st.write("Selected Video:")
             st.video(str(file_path))
+        elif is_audio:
+            st.write("Selected Audio:")
+            st.audio(str(file_path))
 
     with result:
         st.write("Result:")
@@ -900,13 +934,13 @@ def render_preview_file(files, export_to_markdown):
 
         # Determine output/result path
         if st.session_state["method_option"] == "Docling":
-            base_path = os.path.join(OUTPUT_DIR, "docling_results")
+            base_path = OUTPUT_DIR / "docling"
         elif st.session_state["method_option"] == "PyMuPDF + Tesseract":
-            base_path = FOLDER_OUTPUT_PYMU_TESSERACT
+            base_path = OUTPUT_DIR / "pymu_tesseract"
         elif st.session_state["method_option"] == "Azure Doc Intelligence":
-            base_path = os.path.join(OUTPUT_DIR, "doc_intelligent")
+            base_path = OUTPUT_DIR / "azure_document_intelligence"
         elif st.session_state["method_option"] == "Whisper AI":
-            base_path = os.path.join(OUTPUT_DIR, "transcribed_audio")
+            base_path = OUTPUT_DIR / "whisper"
         else:
             base_path = OUTPUT_DIR
 
@@ -937,6 +971,7 @@ def render_preview_file(files, export_to_markdown):
                 if is_pdf and 0 <= page_number - 1 < len(content):
                     selected_page = content[page_number - 1]["content"]
                     dur_per_page = content[page_number - 1].get("duration", 0) or 0
+                    confidence = content[page_number - 1].get("confidence", 0) or 0
                     parse_score = content[page_number - 1].get("parse_score", 0) or 0
                     layout_score = content[page_number - 1].get("layout_score", 0) or 0
                     table_score = content[page_number - 1].get("table_score", 0) or 0
@@ -957,6 +992,7 @@ def render_preview_file(files, export_to_markdown):
                             f"""
                             - **Total Duration**: {total_duration:.2f} seconds
                             - **Time for Page {page_number}**: {dur_per_page:.2f} seconds
+                            - **Confidence**: {confidence:.4f}
                             - **Parse Score**: {parse_score:.4f}
                             - **Layout Score**: {layout_score:.4f}
                             - **Table Score**: {table_score:.4f}
@@ -976,10 +1012,10 @@ def render_preview_file(files, export_to_markdown):
                             else:
                                 for idx, c in enumerate(content):
                                     st.text_area(
-                                        f"Transcript Segment {idx+1}",
+                                        f"Transcript Segment {idx + 1}",
                                         c.get("content", ""),
                                         height=200,
-                                        key=f"video_transcript_{query_file.stem}_{idx}"
+                                        key=f"video_transcript_{query_file.stem}_{idx}",
                                     )
                     else:
                         st.info("No transcript found for this video.")
@@ -1027,14 +1063,14 @@ def main():
     if download_button:
         try:
             handle_download_pdfs(
-                st.session_state["temp_file_path"], df, id_col, url_col, use_specific_id
+                st.session_state["temp_file_path"], df, id_col, url_col
             )
         except Exception as e:
             st.error(f"Error during downloading PDFs: {e}")
 
     # Handle temp clearing
     if clear_temp_button:
-        clear_temp_dir(TEMP_DIR)
+        shutil.rmtree(TEMP_DIR, ignore_errors=True)
         if os.path.exists("exported_results.zip"):
             os.remove("exported_results.zip")
         st.sidebar.success("Temporary files cleared.")
@@ -1051,9 +1087,3 @@ def main():
 
 
 main()
-
-# Cleanup on exit
-atexit.register(clear_temp_dir, TEMP_DIR)
-atexit.register(clear_temp_dir, OUTPUT_DIR)
-atexit.register(clear_temp_dir, TEMP_DIR_PDF)
-atexit.register(clear_temp_dir, DATA_TEMP)
