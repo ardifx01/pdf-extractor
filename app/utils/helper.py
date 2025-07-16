@@ -163,10 +163,10 @@ class Downloader:
                     if self.filepath.suffix.split(".")[-1].lower() in value
                 )
             except StopIteration:
-                logger.error(f"Unsupported file extension: {self.filepath.suffix}")
+                logger.error(f"Unsupported file extension {self.url}: {self.filepath.suffix}")
                 yield log_process(
                     "error",
-                    f"❌ Unsupported file extension: {self.filepath.suffix}. Skipping download...",
+                    f"❌ Unsupported file extension {self.url}: {self.filepath.suffix}. Skipping download...",
                 )
                 continue
 
