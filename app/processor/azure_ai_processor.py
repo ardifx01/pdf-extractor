@@ -144,7 +144,7 @@ class AzureAIProcessor:
         label_masking = ["Non-Text"]
         masked_cv = img_cv.copy()
         for r in results:
-            if not getattr(r.boxes, "xyxy", None) is not None or len(r.boxes.xyxy) == 0:
+            if getattr(r.boxes, "xyxy", None) is None or len(r.boxes.xyxy) == 0:
                 logger.warning("[WARNING] No exclude objects detected")
                 continue
             try:
