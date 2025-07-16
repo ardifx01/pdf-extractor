@@ -177,8 +177,8 @@ class Downloader:
                     )
                     response.raise_for_status()  # Raise an error for bad responses
 
-                    if self.url_id: # overwrite filename with url_id
-                        self.filename = f"{self.url_id}"
+                    if self.url_id:  # overwrite filename with url_id
+                        self.filename = f"{self.url_id}{self.filepath.suffix}"
 
                     with open(self.dirpath / self.filename, "wb") as f:
                         for chunk in response.iter_content(chunk_size=8192):
