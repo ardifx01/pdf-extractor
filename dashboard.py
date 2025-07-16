@@ -1,4 +1,3 @@
-from matplotlib import category
 import streamlit as st
 from streamlit_pdf_viewer import pdf_viewer
 import os
