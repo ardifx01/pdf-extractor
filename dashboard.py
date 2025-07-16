@@ -58,6 +58,8 @@ def init_session_state():
         st.session_state["method_option"] = None
     if "file_uploader_key" not in st.session_state:
         st.session_state["file_uploader_key"] = str(uuid.uuid4())
+    if "url_uploader_key" not in st.session_state:
+        st.session_state["url_uploader_key"] = str(uuid.uuid4())
     if "temp_file_path" not in st.session_state:
         st.session_state["temp_file_path"] = None
     if "already_copied" not in st.session_state:
@@ -206,8 +208,8 @@ def render_sidebar():
         url_pdf_file = st.text_input(
             "Download PDF from URL",
             placeholder="Enter PDF URL here",
-            key="pdf_url_input",
             help="Enter a valid URL to download a PDF file.",
+            key=st.session_state["url_uploader_key"],
         )
 
         if url_pdf_file:
@@ -219,6 +221,10 @@ def render_sidebar():
                         result.get("message", "PDF downloaded successfully."),
                         icon=":material/done_outline:",
                     )
+                    st.session_state["url_uploader_key"] = str(
+                        uuid.uuid4()
+                    )  # Reset input
+                    st.rerun()
 
     df = None
     column_list = []
@@ -420,7 +426,7 @@ def handle_download_pdfs(file_path, df, id_col, url_col):
 
         with st.status("Downloading PDFs...", expanded=True) as status:
             results = Downloader(
-                file_path, url_column=url_col, url_id=id_col
+                df, url_column=url_col, url_id=id_col
             ).download()
             download_slot = st.empty()
 
@@ -540,6 +546,16 @@ def handle_pdf_processing(export_to_markdown, number_thread, overwrite):
         help="Use object detection during processing.",
     )
 
+    ocr_engine = st.radio(
+        "OCR Engine (Docling)",
+        options=["easyocr", "tesseract"],
+        captions=["Accurate", "Fast"],
+        index=0,
+        key="ocr_engine",
+        help="Select the OCR engine to use for text extraction with Docling.",
+        horizontal=True,
+    )
+
     if process_file_btn:
         st.session_state["cancel_processing"] = (
             False  # Uncommented to enable processing
@@ -596,6 +612,7 @@ def handle_pdf_processing(export_to_markdown, number_thread, overwrite):
                             overwrite=overwrite,
                             exclude_object=exclude_object_value,
                             number_threads=number_thread,
+                            ocr_engine=ocr_engine,
                         )
                         for log in processor.process_pdf():
                             if log.get("status") == "skip":
@@ -747,13 +764,13 @@ def handle_pdf_processing(export_to_markdown, number_thread, overwrite):
                     "extracted_at": datetime.now().isoformat(),
                 }
 
-            # file_status.empty()
+            file_status.empty()
 
             if not st.session_state["cancel_processing"]:
                 status.success(
                     f"Files converted to {'Markdown and JSON' if export_to_markdown else 'JSON'} files. Total Success: {total_success}, Skipped {total_skipped}, Failed: {total_failed}"
                 )
-                # st.rerun()
+                st.rerun()
 
     return files
 

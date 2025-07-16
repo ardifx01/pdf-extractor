@@ -199,6 +199,7 @@ class Downloader:
                             )
                             os.remove(self.dirpath / self.filename)
                             continue  # Retry download
+                    break
 
                 except requests.RequestException as e:
                     logger.error(f"Attempt {attempt} failed: {e}")

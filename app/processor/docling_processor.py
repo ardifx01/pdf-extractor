@@ -37,12 +37,14 @@ class DoclingProcessor:
         overwrite: bool = False,
         exclude_object=True,
         number_threads: Optional[int] = None,
+        ocr_engine: str = "easyocr",
     ):
         self.input_path = Path(input_path)
         self.create_markdown = create_markdown
         self.overwrite = overwrite
         self.exclude_object = exclude_object
         self.number_threads = number_threads
+        self.ocr_engine = ocr_engine
         self.output_dir = OUTPUT_DIR / "docling"
 
     def process_pdf(self) -> Generator[dict[str, str], Any, None]:
@@ -112,8 +114,8 @@ class DoclingProcessor:
                         )
                         temp_pdf.save(page_pdf_path, garbage=4, deflate=True)
 
-                    result_text, conversion_time, confidence = self._extract_text(file_path=page_pdf_path)
-                    
+                    result_text, conversion_time, confidence = self._extract_text(file_path=page_pdf_path, ocr_engine=self.ocr_engine)
+
                     if result_text is None:
                         logger.warning(
                             f"No text extracted from page {page_index} of {self.input_path.name}. Retrying with OCR."
@@ -124,6 +126,7 @@ class DoclingProcessor:
                         )
                         result_text, conversion_time, confidence = self._extract_text(
                             file_path=page_pdf_path,
+                            ocr_engine=self.ocr_engine,
                             force_ocr=True
                         )
 
@@ -183,7 +186,7 @@ class DoclingProcessor:
             raise e
 
     def _extract_text(
-        self, file_path: Path, force_ocr: bool = False,
+        self, file_path: Path, ocr_engine: str, force_ocr: bool = False,
     ):
         """Extract text from the PDF document."""
         accelerator_options = AcceleratorOptions(
@@ -200,17 +203,19 @@ class DoclingProcessor:
 
         settings.debug.profile_pipeline_timings = True
 
-        # pipeline_options.ocr_options = EasyOcrOptions(
-        #     lang=["en", "id"],
-        #     force_full_page_ocr=force_ocr,
-        #     download_enabled=True,
-        # )
-
-        pipeline_options.ocr_options = TesseractCliOcrOptions(
-            lang=["eng", "ind"],
-            force_full_page_ocr=force_ocr,
-            tesseract_cmd="tesseract",
-        )
+        match ocr_engine.lower():
+            case "easyocr":
+                pipeline_options.ocr_options = EasyOcrOptions(
+                    lang=["en", "id"],
+                    force_full_page_ocr=force_ocr,
+                    download_enabled=True,
+                )
+            case "tesseract":
+                pipeline_options.ocr_options = TesseractCliOcrOptions(
+                    lang=["eng", "ind"],
+                    force_full_page_ocr=force_ocr,
+                    tesseract_cmd="tesseract",
+                )
 
         converter = DocumentConverter(
             allowed_formats=[InputFormat.PDF],
@@ -228,7 +233,6 @@ class DoclingProcessor:
         confidence = converter_result.confidence.model_dump()
 
         if len(text.strip()) == 0 and not force_ocr:
-            print(f"No text extracted from {file_path.name}. Retrying with OCR.")
             logger.warning(
                 f"No text extracted from {file_path.name}. Retrying with OCR."
             )
