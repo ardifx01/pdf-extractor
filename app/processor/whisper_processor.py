@@ -42,6 +42,8 @@ class WhisperProcessor:
             "temperature": 0.0,
             "condition_on_previous_text": False,
             "no_speech_threshold": 0.9,
+            "word_timestamps": False,
+            "verbose": False,
         }
         self.overwrite = overwrite
         self.output_dir = OUTPUT_DIR / "whisper"
@@ -72,7 +74,7 @@ class WhisperProcessor:
         """
         ensure_temp_dir(TEMP_DIR / format)
         input_format = Path(file_path).suffix[1:].lower()
-        audio = pydub.AudioSegment.from_file(file_path, format=input_format)
+        audio = pydub.AudioSegment.from_file(str(file_path), format=input_format)
         audio = audio.set_frame_rate(sample_rate).set_channels(channels)
         temp_file_path = TEMP_DIR / format / f"temp_audio.{format}"
         audio.export(temp_file_path, format=format)
@@ -198,7 +200,7 @@ class WhisperProcessor:
         # Implement any specific post-processing if needed
         llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash")
         message = HumanMessage(
-            content=f"Perbaiki kata dan kalimat menggunakan bahasa indonesia baku. \n {text}"
+            content=f"Perbaiki transkrip ini ke dalam bahasa Indonesia baku dan jelas. Berikan hasilnya langsung, tanpa pembuka, penjelasan, atau penutup. \n {text}"
         )
 
         response = llm.invoke([message])
